@@ -6,6 +6,7 @@ from litellm import JSONSchemaValidationError
 
 from cognee.shared.logging_utils import get_logger
 from cognee.modules.observability.get_observe import get_observe
+from cognee.modules.observability.langfuse_utils import update_langfuse_observation_from_response
 from cognee.infrastructure.llm.structured_output_framework.litellm_instructor.llm.llm_interface import (
     LLMInterface,
 )
@@ -61,6 +62,7 @@ class MistralAdapter(LLMInterface):
             api_key=get_llm_config().llm_api_key,
         )
 
+    @observe(as_type="generation")
     @retry(
         stop=stop_after_delay(128),
         wait=wait_exponential_jitter(8, 128),
@@ -106,6 +108,15 @@ class MistralAdapter(LLMInterface):
                         messages=messages,
                         response_model=response_model,
                     )
+                output_content = None
+                if response.choices and response.choices[0].message.content:
+                    output_content = response.choices[0].message.content
+                update_langfuse_observation_from_response(
+                    response=response,
+                    input={"user": text_input, "system": system_prompt},
+                    output=output_content,
+                    model=self.model,
+                )
                 if response.choices and response.choices[0].message.content:
                     content = response.choices[0].message.content
                     return response_model.model_validate_json(content)

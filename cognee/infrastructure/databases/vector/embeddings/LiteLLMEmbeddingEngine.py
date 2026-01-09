@@ -26,9 +26,32 @@ from cognee.infrastructure.llm.tokenizer.TikToken import (
     TikTokenTokenizer,
 )
 from cognee.shared.rate_limiting import embedding_rate_limiter_context_manager
+from cognee.modules.observability.get_observe import get_observe
+from cognee.modules.observability.langfuse_utils import (
+    extract_usage_from_response,
+    update_langfuse_observation,
+)
 
 litellm.set_verbose = False
 logger = get_logger("LiteLLMEmbeddingEngine")
+observe = get_observe()
+
+
+def _count_tokens_safe(tokenizer, text: List[str]) -> Optional[int]:
+    try:
+        return sum(tokenizer.count_tokens(item) for item in text)
+    except Exception:
+        return None
+
+
+def _embedding_usage(token_count: Optional[int]) -> Optional[dict]:
+    if token_count is None:
+        return None
+    return {
+        "prompt_tokens": token_count,
+        "completion_tokens": 0,
+        "total_tokens": token_count,
+    }
 
 
 class LiteLLMEmbeddingEngine(EmbeddingEngine):
@@ -86,6 +109,7 @@ class LiteLLMEmbeddingEngine(EmbeddingEngine):
         before_sleep=before_sleep_log(logger, logging.DEBUG),
         reraise=True,
     )
+    @observe(as_type="embedding")
     async def embed_text(self, text: List[str]) -> List[List[float]]:
         """
         Embed a list of text strings into vector representations.
@@ -108,7 +132,21 @@ class LiteLLMEmbeddingEngine(EmbeddingEngine):
         try:
             if self.mock:
                 response = {"data": [{"embedding": [0.0] * self.dimensions} for _ in text]}
-                return [data["embedding"] for data in response["data"]]
+                embeddings = [data["embedding"] for data in response["data"]]
+                token_count = _count_tokens_safe(self.tokenizer, text)
+                update_langfuse_observation(
+                    input={"items": len(text)},
+                    model=self.model,
+                    usage=_embedding_usage(token_count),
+                    metadata={
+                        "dimensions": self.dimensions,
+                        "embedding_model": self.model,
+                        "provider": self.provider,
+                        "mock": True,
+                        "token_count_source": "tokenizer" if token_count is not None else "none",
+                    },
+                )
+                return embeddings
             else:
                 async with embedding_rate_limiter_context_manager():
                     response = await litellm.aembedding(
@@ -118,8 +156,24 @@ class LiteLLMEmbeddingEngine(EmbeddingEngine):
                         api_base=self.endpoint,
                         api_version=self.api_version,
                     )
-
-                return [data["embedding"] for data in response.data]
+                embeddings = [data["embedding"] for data in response.data]
+                usage = extract_usage_from_response(response)
+                token_count = _count_tokens_safe(self.tokenizer, text) if usage is None else None
+                update_langfuse_observation(
+                    input={"items": len(text)},
+                    model=self.model,
+                    usage=usage or _embedding_usage(token_count),
+                    metadata={
+                        "dimensions": self.dimensions,
+                        "embedding_model": self.model,
+                        "provider": self.provider,
+                        "mock": False,
+                        "token_count_source": "response"
+                        if usage is not None
+                        else ("tokenizer" if token_count is not None else "none"),
+                    },
+                )
+                return embeddings
 
         except litellm.exceptions.ContextWindowExceededError as error:
             if isinstance(text, list) and len(text) > 1:

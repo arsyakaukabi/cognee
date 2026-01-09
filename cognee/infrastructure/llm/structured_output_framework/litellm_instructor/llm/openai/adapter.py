@@ -25,11 +25,21 @@ from cognee.infrastructure.llm.exceptions import (
 from cognee.shared.rate_limiting import llm_rate_limiter_context_manager
 from cognee.infrastructure.files.utils.open_data_file import open_data_file
 from cognee.modules.observability.get_observe import get_observe
+from cognee.modules.observability.langfuse_utils import update_langfuse_observation_from_response
 from cognee.shared.logging_utils import get_logger
 
 logger = get_logger()
 
 observe = get_observe()
+
+
+def _serialize_output(response):
+    if isinstance(response, BaseModel):
+        return response.model_dump()
+    model_dump = getattr(response, "model_dump", None)
+    if callable(model_dump):
+        return model_dump()
+    return response
 
 
 class OpenAIAdapter(LLMInterface):
@@ -137,7 +147,7 @@ class OpenAIAdapter(LLMInterface):
 
         try:
             async with llm_rate_limiter_context_manager():
-                return await self.aclient.chat.completions.create(
+                response = await self.aclient.chat.completions.create(
                     model=self.model,
                     messages=[
                         {
@@ -156,6 +166,13 @@ class OpenAIAdapter(LLMInterface):
                     max_retries=self.MAX_RETRIES,
                     **kwargs,
                 )
+                update_langfuse_observation_from_response(
+                    response=response,
+                    input={"user": text_input, "system": system_prompt},
+                    output=_serialize_output(response),
+                    model=self.model,
+                )
+                return response
         except (
             ContentFilterFinishReasonError,
             ContentPolicyViolationError,
@@ -230,7 +247,7 @@ class OpenAIAdapter(LLMInterface):
               BaseModel.
         """
 
-        return self.client.chat.completions.create(
+        response = self.client.chat.completions.create(
             model=self.model,
             messages=[
                 {
@@ -249,6 +266,13 @@ class OpenAIAdapter(LLMInterface):
             max_retries=self.MAX_RETRIES,
             **kwargs,
         )
+        update_langfuse_observation_from_response(
+            response=response,
+            input={"user": text_input, "system": system_prompt},
+            output=_serialize_output(response),
+            model=self.model,
+        )
+        return response
 
     @retry(
         stop=stop_after_delay(128),

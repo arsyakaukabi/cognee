@@ -23,3 +23,14 @@ def get_observe():
                 return decorator
 
         return no_op_decorator
+
+
+def get_langfuse_context():
+    monitoring = get_base_config().monitoring_tool
+
+    if monitoring == Observer.LANGFUSE:
+        from langfuse.decorators import langfuse_context
+
+        return langfuse_context
+
+    return None

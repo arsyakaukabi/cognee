@@ -21,8 +21,18 @@ from cognee.infrastructure.llm.structured_output_framework.litellm_instructor.ll
     sleep_and_retry_sync,
 )
 from cognee.modules.observability.get_observe import get_observe
+from cognee.modules.observability.langfuse_utils import update_langfuse_observation_from_response
 
 observe = get_observe()
+
+
+def _serialize_output(response):
+    if isinstance(response, BaseModel):
+        return response.model_dump()
+    model_dump = getattr(response, "model_dump", None)
+    if callable(model_dump):
+        return model_dump()
+    return response
 
 
 class BedrockAdapter(LLMInterface):
@@ -110,7 +120,14 @@ class BedrockAdapter(LLMInterface):
 
         try:
             request_params = self._create_bedrock_request(text_input, system_prompt, response_model)
-            return await self.aclient.chat.completions.create(**request_params)
+            response = await self.aclient.chat.completions.create(**request_params)
+            update_langfuse_observation_from_response(
+                response=response,
+                input={"user": text_input, "system": system_prompt},
+                output=_serialize_output(response),
+                model=self.model,
+            )
+            return response
 
         except (
             ContentPolicyViolationError,
@@ -135,7 +152,14 @@ class BedrockAdapter(LLMInterface):
         """Generate structured output from AWS Bedrock API (synchronous)."""
 
         request_params = self._create_bedrock_request(text_input, system_prompt, response_model)
-        return self.client.chat.completions.create(**request_params)
+        response = self.client.chat.completions.create(**request_params)
+        update_langfuse_observation_from_response(
+            response=response,
+            input={"user": text_input, "system": system_prompt},
+            output=_serialize_output(response),
+            model=self.model,
+        )
+        return response
 
     def show_prompt(self, text_input: str, system_prompt: str) -> str:
         """Format and display the prompt for a user query."""
