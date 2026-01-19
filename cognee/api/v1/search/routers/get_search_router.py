@@ -32,6 +32,36 @@ class SearchPayloadDTO(InDTO):
     use_combined_context: bool = Field(default=False)
 
 
+class RetrievalPayloadDTO(InDTO):
+    """Payload for retrieval endpoint."""
+    query: str = Field(description="Search query text")
+    top_k: int = Field(default=10, description="Maximum number of results to return")
+    search_type: str = Field(
+        default="chunks",
+        description="Search type: 'chunks' or 'graph_completion'"
+    )
+
+
+class RetrievalDataDTO(OutDTO):
+    """Single retrieval result data."""
+    idKnowledge: str = Field(alias="idKnowledge")
+    knowledgeType: str = Field(alias="knowledgeType")
+
+
+class RetrievalResponseDTO(OutDTO):
+    """Standard API response for retrieval."""
+    status: str
+    message: str
+    data: List[RetrievalDataDTO]
+
+
+class ContextResponseDTO(OutDTO):
+    """Standard API response for context retrieval."""
+    status: str
+    message: str
+    data: str
+
+
 def get_search_router() -> APIRouter:
     router = APIRouter()
 
@@ -143,4 +173,124 @@ def get_search_router() -> APIRouter:
         except Exception as error:
             return JSONResponse(status_code=409, content={"error": str(error)})
 
+    @router.post("/retrieval", response_model=RetrievalResponseDTO)
+    async def retrieval_search(
+        payload: RetrievalPayloadDTO,
+        user: User = Depends(get_authenticated_user)
+    ):
+        """
+        Retrieval endpoint for testing purposes.
+        
+        Returns document IDs and their knowledge types from CHUNKS or GRAPH_COMPLETION search.
+        
+        ## Request Parameters
+        - **query** (str): The search query text
+        - **top_k** (int): Maximum number of results to return (default: 10)
+        - **search_type** (str): Either "chunks" or "graph_completion"
+        
+        ## Response
+        Returns a structured response containing:
+        - **status**: "success" or "error"
+        - **message**: Description of the result
+        - **data**: List of retrieval results
+        
+        ## Example Response
+        ```json
+        {
+          "status": "success",
+          "message": "Retrieval successful",
+          "data": [
+            {"idKnowledge": "nfyCCSJM8rtsnZSTWDmyrK", "knowledgeType": "produk"}
+          ]
+        }
+        ```
+        """
+        send_telemetry(
+            "Retrieval API Endpoint Invoked",
+            user.id,
+            additional_properties={
+                "endpoint": "POST /v1/search/retrieval",
+                "search_type": payload.search_type,
+                "query": payload.query[:100],
+                "top_k": payload.top_k,
+                "cognee_version": cognee_version,
+            },
+        )
+
+        from cognee.api.v1.search.retrieval import retrieve
+
+        try:
+            results = await retrieve(
+                query=payload.query,
+                top_k=payload.top_k,
+                search_type=payload.search_type
+            )
+            
+            data = [
+                {"idKnowledge": r.id_knowledge, "knowledgeType": r.knowledge_type}
+                for r in results
+            ]
+            
+            return jsonable_encoder({
+                "status": "success",
+                "message": "Retrieval successful",
+                "data": data
+            })
+        except Exception as error:
+            return JSONResponse(status_code=409, content={"status": "error", "message": str(error), "data": []})
+
+    @router.post("/context", response_model=ContextResponseDTO)
+    async def context_search(
+        payload: SearchPayloadDTO,
+        user: User = Depends(get_authenticated_user)
+    ):
+        """
+        Get resolved context text for a query.
+        
+        Retrieves triplets from the graph based on the query and resolves them into a human-readable text.
+        This uses the same logic as the graph completion retriever's context generation step.
+        
+        ## Request Parameters
+        Uses standard SearchPayloadDTO:
+        - **query** (str): The search query text
+        - **top_k** (int): Maximum number of results/triplets to consider (default: 10)
+        - **search_type**: (Ignored, always uses graph context logic)
+        
+        ## Response
+        Returns a structured response containing:
+        - **status**: "success" or "error"
+        - **message**: Description
+        - **data**: The resolved context text string (Nodes and Connections)
+        """
+        send_telemetry(
+            "Context API Endpoint Invoked",
+            user.id,
+            additional_properties={
+                "endpoint": "POST /v1/search/context",
+                "query": payload.query[:100],
+                "top_k": payload.top_k,
+                "cognee_version": cognee_version,
+            },
+        )
+
+        from cognee.api.v1.search.context import get_context
+
+        try:
+            # We use payload.top_k or split wide_search_top_k if needed, 
+            # but for now passing top_k is sufficient.
+            context_text = await get_context(
+                query=payload.query,
+                top_k=payload.top_k if payload.top_k else 10,
+                # we could pass other params if needed
+            )
+            
+            return jsonable_encoder({
+                "status": "success",
+                "message": "Context retrieved successfully",
+                "data": context_text
+            })
+        except Exception as error:
+            return JSONResponse(status_code=409, content={"status": "error", "message": str(error), "data": ""})
+
     return router
+
