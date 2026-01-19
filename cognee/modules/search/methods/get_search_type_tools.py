@@ -16,6 +16,8 @@ from cognee.modules.retrieval.graph_completion_retriever import GraphCompletionR
 from cognee.modules.retrieval.temporal_retriever import TemporalRetriever
 from cognee.modules.retrieval.coding_rules_retriever import CodingRulesRetriever
 from cognee.modules.retrieval.jaccard_retrival import JaccardChunksRetriever
+from cognee.modules.retrieval.bm25_retriever import BM25Retriever
+from cognee.modules.retrieval.hybrid_retriever import HybridRetriever
 from cognee.modules.retrieval.graph_summary_completion_retriever import (
     GraphSummaryCompletionRetriever,
 )
@@ -191,6 +193,18 @@ async def get_search_type_tools(
         SearchType.CODING_RULES: [
             CodingRulesRetriever(rules_nodeset_name=node_name).get_existing_rules,
         ],
+        SearchType.CHUNKS_BM25: (
+            lambda _r=BM25Retriever(top_k=top_k): [
+                _r.get_completion,
+                _r.get_context,
+            ]
+        )(),
+        SearchType.HYBRID_CHUNKS: (
+            lambda _r=HybridRetriever(final_top_k=top_k): [
+                _r.get_completion,
+                _r.get_context,
+            ]
+        )(),
     }
 
     # If the query type is FEELING_LUCKY, select the search type intelligently
