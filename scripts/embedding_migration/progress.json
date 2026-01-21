@@ -1,0 +1,49 @@
+{
+  "tables": {
+    "DocumentChunk_text": {
+      "last_processed_id": "fe960e76-ad54-5471-9c33-f0d562550283",
+      "processed_count": 615,
+      "started_at": "2026-01-21T09:11:44.243029",
+      "completed": true,
+      "completed_at": "2026-01-21T09:13:05.421131"
+    },
+    "Entity_name": {
+      "last_processed_id": "ffee6124-19c8-5c11-8107-600e70f93ed3",
+      "processed_count": 3496,
+      "started_at": "2026-01-21T09:13:05.422404",
+      "completed": true,
+      "completed_at": "2026-01-21T09:15:35.688190"
+    },
+    "EntityType_name": {
+      "last_processed_id": "fe3f9a44-3516-5e50-b570-25379760523e",
+      "processed_count": 395,
+      "started_at": "2026-01-21T09:15:35.689587",
+      "completed": true,
+      "completed_at": "2026-01-21T09:15:57.993566"
+    },
+    "EdgeType_relationship_name": {
+      "last_processed_id": "fffdba6c-b7dc-5b35-aee7-fc56995d796c",
+      "processed_count": 6653,
+      "started_at": "2026-01-21T09:15:57.994040",
+      "completed": true,
+      "completed_at": "2026-01-21T09:21:03.968223"
+    },
+    "TextSummary_text": {
+      "last_processed_id": "fff64c5d-5f87-5291-a035-66568c0ac8ee",
+      "processed_count": 615,
+      "started_at": "2026-01-21T09:21:03.969878",
+      "completed": true,
+      "completed_at": "2026-01-21T09:21:36.403740"
+    },
+    "TextDocument_name": {
+      "last_processed_id": "ff13999c-5b19-5e0e-85ce-291b96052afd",
+      "processed_count": 613,
+      "started_at": "2026-01-21T09:21:36.404348",
+      "completed": true,
+      "completed_at": "2026-01-21T09:22:01.621326"
+    }
+  },
+  "started_at": "2026-01-21T09:11:43.160068",
+  "last_updated": "2026-01-21T09:22:01.624261",
+  "completed": true
+}

@@ -202,3 +202,4 @@ SWE-bench_testsample/
 docs/
 testing/
 data/
+*.dump

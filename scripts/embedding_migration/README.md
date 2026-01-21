@@ -52,7 +52,7 @@ python scripts/embedding_migration/01_summary.py
 - Dimensi vector saat ini (1536 atau 3072)
 - Konfigurasi embedding engine yang aktif
 
-### Step 2: Alter Table Dimensions (Manual via psql)
+### Step 2: Alter Table Dimensions
 
 > ⚠️ **PENTING**: Backup database terlebih dahulu!
 
@@ -62,10 +62,33 @@ pg_dump -h 127.0.0.1 -U admin -d bribrain_knowledge_base \
     -F c -f backup_pre_migration_$(date +%Y%m%d).dump
 ```
 
-Jalankan SQL berikut untuk mengubah dimensi kolom vector:
+> ⚠️ **CATATAN**: pgvector TIDAK BISA langsung ALTER TYPE jika kolom sudah berisi data dengan dimensi berbeda. 
+> Gunakan script SQL yang sudah disediakan:
+
+**Jalankan script SQL untuk ALTER column:**
+
+```bash
+PGPASSWORD=admin psql -h 127.0.0.1 -U admin -d bribrain_knowledge_base \
+    -f scripts/embedding_migration/alter_dimension.sql
+```
+
+Script ini akan:
+1. Set semua vector column ke NULL
+2. ALTER COLUMN TYPE ke vector(3072)
+3. Verifikasi hasil
+
+**Atau jalankan manual step-by-step:**
 
 ```sql
--- Jalankan via psql atau database client
+-- Set vector ke NULL dulu (WAJIB sebelum ALTER)
+UPDATE "DocumentChunk_text" SET vector = NULL;
+UPDATE "Entity_name" SET vector = NULL;
+UPDATE "EntityType_name" SET vector = NULL;
+UPDATE "EdgeType_relationship_name" SET vector = NULL;
+UPDATE "TextSummary_text" SET vector = NULL;
+UPDATE "TextDocument_name" SET vector = NULL;
+
+-- Baru ALTER TYPE
 ALTER TABLE "DocumentChunk_text" ALTER COLUMN vector TYPE vector(3072);
 ALTER TABLE "Entity_name" ALTER COLUMN vector TYPE vector(3072);
 ALTER TABLE "EntityType_name" ALTER COLUMN vector TYPE vector(3072);

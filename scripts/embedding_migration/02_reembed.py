@@ -40,13 +40,15 @@ from cognee.infrastructure.databases.vector import get_vector_engine
 
 
 # Konfigurasi tabel vector
+# NOTE: Cognee menyimpan semua data sebagai IndexSchema dengan field 'text'
+# meskipun nama tabel berbeda (Entity_name, EdgeType_relationship_name, dll)
 VECTOR_TABLES = {
     "DocumentChunk_text": "text",
-    "Entity_name": "name",
-    "EntityType_name": "name",
-    "EdgeType_relationship_name": "relationship_name",
+    "Entity_name": "text",           # Bukan 'name', tapi 'text' (IndexSchema)
+    "EntityType_name": "text",       # Bukan 'name', tapi 'text' (IndexSchema)
+    "EdgeType_relationship_name": "text",  # Bukan 'relationship_name', tapi 'text'
     "TextSummary_text": "text",
-    "TextDocument_name": "name",
+    "TextDocument_name": "text",     # Bukan 'name', tapi 'text' (IndexSchema)
 }
 
 # File paths
@@ -123,17 +125,18 @@ async def fetch_batch(
     async with engine.get_async_session() as session:
         if last_id:
             # Resume from last processed ID
+            # Use CAST() instead of :: to avoid asyncpg parameter binding conflicts
             query = text(f"""
-                SELECT id::text, payload->>'{source_field}' as source_text
+                SELECT CAST(id AS text) as id, payload->>'{source_field}' as source_text
                 FROM "{table_name}"
-                WHERE id > :last_id::uuid
+                WHERE id > CAST(:last_id AS uuid)
                 ORDER BY id
                 LIMIT :batch_size
             """)
             result = await session.execute(query, {"last_id": last_id, "batch_size": batch_size})
         else:
             query = text(f"""
-                SELECT id::text, payload->>'{source_field}' as source_text
+                SELECT CAST(id AS text) as id, payload->>'{source_field}' as source_text
                 FROM "{table_name}"
                 ORDER BY id
                 LIMIT :batch_size OFFSET :offset
@@ -158,10 +161,11 @@ async def update_vectors_batch(
     async with engine.get_async_session() as session:
         for record_id, new_vector in id_vector_pairs:
             vector_str = "[" + ",".join(map(str, new_vector)) + "]"
+            # Use CAST() instead of :: to avoid asyncpg parameter binding conflicts
             query = text(f"""
                 UPDATE "{table_name}"
-                SET vector = :vector::vector
-                WHERE id = :id::uuid
+                SET vector = CAST(:vector AS vector)
+                WHERE id = CAST(:id AS uuid)
             """)
             await session.execute(query, {"id": record_id, "vector": vector_str})
             updated += 1
