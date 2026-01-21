@@ -160,6 +160,20 @@ def normalize_category_prefix(category: str) -> str:
     return mapping.get(category_lower, category_lower)
 
 
+def normalize_doc_name(name: str) -> str:
+    """Normalize doc name to use double-underscore prefix if applicable."""
+    if "__" in name:
+        return name
+
+    known_prefixes = ("helpdesk", "wi", "produk", "promo", "program")
+    for prefix in known_prefixes:
+        marker = f"{prefix}_"
+        if name.startswith(marker):
+            return f"{prefix}__{name[len(marker):]}"
+
+    return name
+
+
 def build_prefixed_ground_truth(context_ids: List[str], categories: List[str]) -> List[str]:
     """Build prefixed ground truth by pairing doc_ids with categories by index."""
     if not context_ids:
@@ -243,8 +257,12 @@ async def evaluate(input_csv: str, output_csv: str, log_file: str, top_k: int) -
                 doc_names = await extract_document_names_from_chunks(
                     chunks, top_k=top_k, graph_engine=graph_engine
                 )
-            
-            id_eval = bool(ground_truth) and any(doc_id in ground_truth for doc_id in doc_names)
+
+            normalized_ground_truth = [normalize_doc_name(doc_id) for doc_id in ground_truth]
+            doc_names = [normalize_doc_name(doc_name) for doc_name in doc_names]
+            id_eval = bool(normalized_ground_truth) and any(
+                doc_id in normalized_ground_truth for doc_id in doc_names
+            )
             if id_eval:
                 hit_count += 1
             

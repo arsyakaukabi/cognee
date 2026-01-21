@@ -6,3 +6,4 @@ Your task is to perform a detailed entity and concept extraction from text to ge
 	•	Avoid duplicates and overly generic terms.
 	•	Consider different perspectives and indirect references.
 	•	Return only a list of unique node strings with all the entities.
+	•	Generate all output in Bahasa Indonesia.

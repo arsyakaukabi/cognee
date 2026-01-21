@@ -23,4 +23,6 @@ The aim is to achieve simplicity and clarity in the knowledge graph.
   always use the most complete identifier for that entity throughout the knowledge graph. In this example, use "John Doe" as the Persons ID.
 Remember, the knowledge graph should be coherent and easily understandable, so maintaining consistency in entity references is crucial.
 # 4. Strict Compliance
-Adhere to the rules strictly. Non-compliance will result in termination
+Adhere to the rules strictly. Non-compliance will result in termination.
+# 5. Language
+Generate all output in Bahasa Indonesia.
