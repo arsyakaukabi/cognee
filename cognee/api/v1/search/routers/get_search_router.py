@@ -1,8 +1,8 @@
-from uuid import UUID
+from uuid import UUID, uuid4
 from typing import Optional, Union, List, Any
 from datetime import datetime
 from pydantic import Field
-from fastapi import Depends, APIRouter
+from fastapi import Depends, APIRouter, Request
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 
@@ -13,6 +13,7 @@ from cognee.modules.users.models import User
 from cognee.modules.search.operations import get_history
 from cognee.modules.users.methods import get_authenticated_user
 from cognee.shared.utils import send_telemetry
+from cognee.shared.performance_utils import get_correlation_id, set_debug_trace, TraceSpan, request_correlation_id
 from cognee import __version__ as cognee_version
 
 
@@ -176,6 +177,7 @@ def get_search_router() -> APIRouter:
     @router.post("/retrieval", response_model=RetrievalResponseDTO)
     async def retrieval_search(
         payload: RetrievalPayloadDTO,
+        request: Request,
         user: User = Depends(get_authenticated_user)
     ):
         """
@@ -205,6 +207,15 @@ def get_search_router() -> APIRouter:
         }
         ```
         """
+        # --- Instrumentation Start ---
+        cid = str(uuid4())
+        request_correlation_id.set(cid)
+        
+        # Check for debug header
+        debug_trace = request.headers.get("X-Debug-Trace", "").lower() == "true"
+        set_debug_trace(debug_trace)
+        # --- Instrumentation End ---
+
         send_telemetry(
             "Retrieval API Endpoint Invoked",
             user.id,
@@ -214,34 +225,38 @@ def get_search_router() -> APIRouter:
                 "query": payload.query[:100],
                 "top_k": payload.top_k,
                 "cognee_version": cognee_version,
+                "correlation_id": cid,
             },
         )
 
         from cognee.api.v1.search.retrieval import retrieve
 
         try:
-            results = await retrieve(
-                query=payload.query,
-                top_k=payload.top_k,
-                search_type=payload.search_type
-            )
-            
-            data = [
-                {"idKnowledge": r.id_knowledge, "knowledgeType": r.knowledge_type}
-                for r in results
-            ]
+            async with TraceSpan(name="api.retrieval_search", component="api"):
+                results = await retrieve(
+                    query=payload.query,
+                    top_k=payload.top_k,
+                    search_type=payload.search_type
+                )
+                
+                data = [
+                    {"idKnowledge": r.id_knowledge, "knowledgeType": r.knowledge_type}
+                    for r in results
+                ]
             
             return jsonable_encoder({
                 "status": "success",
                 "message": "Retrieval successful",
-                "data": data
+                "data": data,
+                "correlation_id": cid
             })
         except Exception as error:
-            return JSONResponse(status_code=409, content={"status": "error", "message": str(error), "data": []})
+            return JSONResponse(status_code=409, content={"status": "error", "message": str(error), "data": [], "correlation_id": cid})
 
     @router.post("/context", response_model=ContextResponseDTO)
     async def context_search(
         payload: SearchPayloadDTO,
+        request: Request,
         user: User = Depends(get_authenticated_user)
     ):
         """
@@ -262,6 +277,14 @@ def get_search_router() -> APIRouter:
         - **message**: Description
         - **data**: The resolved context text string (Nodes and Connections)
         """
+        # --- Instrumentation Start ---
+        cid = str(uuid4())
+        request_correlation_id.set(cid)
+
+        debug_trace = request.headers.get("X-Debug-Trace", "").lower() == "true"
+        set_debug_trace(debug_trace)
+        # --- Instrumentation End ---
+
         send_telemetry(
             "Context API Endpoint Invoked",
             user.id,
@@ -270,6 +293,7 @@ def get_search_router() -> APIRouter:
                 "query": payload.query[:100],
                 "top_k": payload.top_k,
                 "cognee_version": cognee_version,
+                "correlation_id": cid,
             },
         )
 
@@ -278,19 +302,21 @@ def get_search_router() -> APIRouter:
         try:
             # We use payload.top_k or split wide_search_top_k if needed, 
             # but for now passing top_k is sufficient.
-            context_text = await get_context(
-                query=payload.query,
-                top_k=payload.top_k if payload.top_k else 10,
-                # we could pass other params if needed
-            )
+            async with TraceSpan(name="api.context_search", component="api"):
+                context_text = await get_context(
+                    query=payload.query,
+                    top_k=payload.top_k if payload.top_k else 10,
+                    # we could pass other params if needed
+                )
             
             return jsonable_encoder({
                 "status": "success",
                 "message": "Context retrieved successfully",
-                "data": context_text
+                "data": context_text,
+                "correlation_id": cid
             })
         except Exception as error:
-            return JSONResponse(status_code=409, content={"status": "error", "message": str(error), "data": ""})
+            return JSONResponse(status_code=409, content={"status": "error", "message": str(error), "data": "", "correlation_id": cid})
 
     return router
 

@@ -26,6 +26,28 @@ from ..exceptions import CollectionNotFoundError
 from ..vector_db_interface import VectorDBInterface
 from ..embeddings.EmbeddingEngine import EmbeddingEngine
 from .serialize_data import serialize_data
+from sqlalchemy.types import UserDefinedType
+
+class HalfVector(UserDefinedType):
+    cache_ok = True
+
+    def __init__(self, dim=None):
+        self.dim = dim
+
+    def get_col_spec(self, **kw):
+        if self.dim is None:
+            return "halfvec"
+        return "halfvec(%d)" % self.dim
+
+    def bind_processor(self, dialect):
+        def process(value):
+            return value
+        return process
+
+    def result_processor(self, dialect, coltype):
+        def process(value):
+            return value
+        return process
 
 logger = get_logger("PGVectorAdapter")
 
@@ -308,34 +330,62 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
         if query_text and not query_vector:
             query_vector = (await self.embedding_engine.embed_text([query_text]))[0]
 
-        # Get PGVectorDataPoint Table from database
-        PGVectorDataPoint = await self.get_table(collection_name)
-
-        if limit is None:
-            async with self.get_async_session() as session:
-                query = select(func.count()).select_from(PGVectorDataPoint)
-                result = await session.execute(query)
-                limit = result.scalar_one()
-
-        # If limit is still 0, no need to do the search, just return empty results
-        if limit <= 0:
-            return []
+        from uuid import UUID
 
         # NOTE: This needs to be initialized in case search doesn't return a value
         closest_items = []
 
+        vector_size = self.embedding_engine.get_vector_size()
+        
+        # Define model dynamically to avoid reflection overhead
+        class PGVectorDataPoint(Base):
+            __tablename__ = collection_name
+            __table_args__ = {"extend_existing": True}
+            id: Mapped[UUID] = mapped_column(primary_key=True)
+            payload = Column(JSON)
+            vector = Column(self.Vector(vector_size))
+
+        # Use async session to connect to the database
         # Use async session to connect to the database
         async with self.get_async_session() as session:
+            # Cast to HalfVector to match the index definition
+            # We use 3072 as fixed dimension based on our knowledge, or query_vector length
+            dim = len(query_vector)
+            
+            # Note: We use the <-> operator explicitly with casting
+            # (col::halfvec) <-> (query::halfvec)
+            
+            # Serialize list to string for asyncpg/postgres to interpret as halfvec
+            query_vector_str = f"[{','.join(str(f) for f in query_vector)}]"
+            
+            # Cast right operand to HalfVector explicitly
+            query_expr = func.cast(query_vector_str, HalfVector(dim))
+            
+            # Use ORM attribute access (PGVectorDataPoint.vector) instead of Table access (PGVectorDataPoint.c.vector)
+            vector_column = PGVectorDataPoint.vector
+            vector_expr = func.cast(vector_column, HalfVector(dim))
+            
+            similarity_expr = vector_expr.op('<=>')(query_expr).label("similarity")
+
             query = select(
-                PGVectorDataPoint,
-                PGVectorDataPoint.c.vector.cosine_distance(query_vector).label("similarity"),
+                PGVectorDataPoint.id,
+                PGVectorDataPoint.payload,
+                similarity_expr,
             ).order_by("similarity")
 
-            if limit > 0:
+            if limit is not None and limit > 0:
                 query = query.limit(limit)
 
             # Find closest vectors to query_vector
-            closest_items = await session.execute(query)
+            try:
+                closest_items = await session.execute(query)
+            except ProgrammingError as e:
+                if "does not exist" in str(e):
+                    # Table does not exist, return empty results
+                    # This mimics the behavior of filtered search_in_collection handling CollectionNotFoundError
+                    # but doing it here prevents the crash without needing overhead of checking existence first
+                    return []
+                raise e
 
         vector_list = []
 

@@ -49,6 +49,9 @@ def _extract_nodes_from_edges(retrieved_edges: List[Edge]) -> dict:
     return nodes
 
 
+from cognee.shared.performance_utils import trace_perf
+
+@trace_perf("resolve_edges_to_text", "graph")
 async def resolve_edges_to_text(retrieved_edges: List[Edge]) -> str:
     """Converts retrieved graph edges into a human-readable string format."""
     nodes = _extract_nodes_from_edges(retrieved_edges)
