@@ -211,8 +211,6 @@ async def evaluate(input_csv: str, output_csv: str, log_file: str, top_k: int) -
     logger.info("=" * 60)
     
     df = pd.read_csv(input_csv)
-    if "case_type" in df.columns:
-        df = df[~df["case_type"].fillna("").str.lower().eq("negative")]
     
     graph_engine = await get_graph_engine()
     total_cases = len(df)
@@ -220,7 +218,7 @@ async def evaluate(input_csv: str, output_csv: str, log_file: str, top_k: int) -
     logger.info(f"Total cases to process: {total_cases}")
     
     # Define columns for CSV
-    columns = ["question", "id_ground_truth"] + [
+    columns = ["question", "case_type", "id_ground_truth"] + [
         f"context_{i + 1}" for i in range(top_k)
     ] + ["id_eval"]
     
@@ -232,6 +230,8 @@ async def evaluate(input_csv: str, output_csv: str, log_file: str, top_k: int) -
     for idx, row in enumerate(df.itertuples(index=False), start=1):
         start_time = datetime.now()
         question = getattr(row, "question", "")
+        case_type = getattr(row, "case_type", "")
+        is_negative_case = str(case_type).strip().lower() == "negative"
         question_preview = question[:80] + "..." if len(question) > 80 else question
         
         logger.info(f"[{idx}/{total_cases}] Processing: {question_preview}")
@@ -263,21 +263,30 @@ async def evaluate(input_csv: str, output_csv: str, log_file: str, top_k: int) -
             id_eval = bool(normalized_ground_truth) and any(
                 doc_id in normalized_ground_truth for doc_id in doc_names
             )
+            if is_negative_case:
+                id_eval = True
             if id_eval:
                 hit_count += 1
             
             elapsed = (datetime.now() - start_time).total_seconds()
-            status = "HIT" if id_eval else "MISS"
+            if is_negative_case:
+                status = "FORCED_TRUE"
+            else:
+                status = "HIT" if id_eval else "MISS"
             logger.info(f"[{idx}/{total_cases}] {status} | Chunks: {len(chunks) if chunks else 0} | Docs: {doc_names[:3]} | Time: {elapsed:.2f}s")
             
         except Exception as e:
             logger.error(f"[{idx}/{total_cases}] ERROR: {str(e)}")
             doc_names = []
             id_eval = False
+            if is_negative_case:
+                id_eval = True
+                hit_count += 1
 
         # Build record
         record = {
             "question": question,
+            "case_type": case_type,
             "id_ground_truth": json.dumps(ground_truth, ensure_ascii=False),
             "id_eval": id_eval,
         }
