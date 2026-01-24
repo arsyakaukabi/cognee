@@ -38,7 +38,7 @@ class RetrievalPayloadDTO(InDTO):
     top_k: int = Field(default=10, description="Maximum number of results to return")
     search_type: str = Field(
         default="chunks",
-        description="Search type: 'chunks' or 'graph_completion'"
+        description="Search type: 'chunks', 'graph_completion', or 'graph_completion_custom'"
     )
 
 
@@ -186,7 +186,7 @@ def get_search_router() -> APIRouter:
         ## Request Parameters
         - **query** (str): The search query text
         - **top_k** (int): Maximum number of results to return (default: 10)
-        - **search_type** (str): Either "chunks" or "graph_completion"
+        - **search_type** (str): Either "chunks", "graph_completion", or "graph_completion_custom"
         
         ## Response
         Returns a structured response containing:

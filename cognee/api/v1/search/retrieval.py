@@ -10,6 +10,7 @@ import cognee
 from cognee.modules.search.types import SearchType
 from cognee.infrastructure.databases.graph import get_graph_engine
 from cognee.modules.retrieval.graph_completion_retriever import GraphCompletionRetriever
+from cognee.modules.search.custom import search_knowledge_ids
 
 
 class RetrievalResult(BaseModel):
@@ -184,5 +185,15 @@ async def retrieve(query: str, top_k: int = 10, search_type: str = "chunks") -> 
     """
     if search_type.lower() == "graph_completion":
         return await retrieve_graph_completion(query, top_k)
+    elif search_type.lower() == "graph_completion_custom":
+        doc_names = await search_knowledge_ids(query, method="graph", target_n=top_k)
+        results = []
+        for doc_name in doc_names:
+            id_knowledge, knowledge_type = parse_document_name(doc_name)
+            results.append(RetrievalResult(
+                id_knowledge=id_knowledge,
+                knowledge_type=knowledge_type
+            ))
+        return results
     else:
         return await retrieve_chunks(query, top_k)
