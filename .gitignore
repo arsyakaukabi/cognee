@@ -197,3 +197,9 @@ SWE-bench_testsample/
 
 # ChromaDB Data
 .chromadb_data/
+
+# testing/
+docs/
+testing/
+data/
+*.dump
