@@ -151,6 +151,14 @@ async def brute_force_triplet_search(
         logger.error("Failed to initialize vector engine: %s", e)
         raise RuntimeError("Initialization error") from e
 
+    # Filter to collections that actually exist to avoid wasted queries/errors.
+    # This does not change quality because missing collections already return empty results.
+    if collections:
+        exists_flags = await asyncio.gather(
+            *[vector_engine.has_collection(collection_name) for collection_name in collections]
+        )
+        collections = [c for c, ok in zip(collections, exists_flags) if ok]
+
     t_embed_start = time.perf_counter_ns() if timing_on else 0
     query_vector = (await vector_engine.embedding_engine.embed_text([query]))[0]
     if timing_on:

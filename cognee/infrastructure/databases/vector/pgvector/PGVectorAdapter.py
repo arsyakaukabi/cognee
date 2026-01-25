@@ -4,7 +4,7 @@ from typing import List, Optional, get_type_hints
 from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import insert, UUID as PG_UUID
-from sqlalchemy import JSON, Column, Table, select, delete, MetaData, func, bindparam, Float
+from sqlalchemy import JSON, Column, Table, select, delete, MetaData, func, bindparam, Float, text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.exc import ProgrammingError
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
@@ -74,6 +74,30 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
 
         self.Vector = Vector
         self._collection_models: dict[str, type[Base]] = {}
+        self._existing_collections: Optional[set[str]] = None
+        self._existing_collections_lock = asyncio.Lock()
+
+    async def _get_existing_collections(self) -> set[str]:
+        if self._existing_collections is not None:
+            return self._existing_collections
+
+        async with self._existing_collections_lock:
+            if self._existing_collections is not None:
+                return self._existing_collections
+
+            if self.engine.dialect.name == "postgresql":
+                async with self.engine.begin() as connection:
+                    rows = await connection.execute(
+                        text("SELECT tablename FROM pg_tables WHERE schemaname = current_schema()")
+                    )
+                    self._existing_collections = {r[0] for r in rows.fetchall()}
+            else:
+                async with self.engine.begin() as connection:
+                    metadata = MetaData()
+                    await connection.run_sync(metadata.reflect)
+                    self._existing_collections = set(metadata.tables.keys())
+
+        return self._existing_collections
 
     async def embed_data(self, data: list[str]) -> list[list[float]]:
         """
@@ -105,16 +129,8 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
 
             - bool: Returns True if the collection exists, False otherwise.
         """
-        async with self.engine.begin() as connection:
-            # Create a MetaData instance to load table information
-            metadata = MetaData()
-            # Load table information from schema into MetaData
-            await connection.run_sync(metadata.reflect)
-
-            if collection_name in metadata.tables:
-                return True
-            else:
-                return False
+        existing = await self._get_existing_collections()
+        return collection_name in existing
 
     @retry(
         retry=retry_if_exception_type(
@@ -163,6 +179,9 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
                             await connection.run_sync(
                                 Base.metadata.create_all, tables=[PGVectorDataPoint.__table__]
                             )
+                    # Keep the in-memory cache consistent for the current process.
+                    if self._existing_collections is not None:
+                        self._existing_collections.add(collection_name)
 
     @retry(
         retry=retry_if_exception_type(DeadlockDetectedError),
@@ -311,6 +330,10 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
             query_vector = (await self.embedding_engine.embed_text([query_text]))[0]
 
         from uuid import UUID
+
+        # Fast-path: avoid doing work for missing collections.
+        if not await self.has_collection(collection_name):
+            return []
 
         # NOTE: This needs to be initialized in case search doesn't return a value
         closest_items = []
