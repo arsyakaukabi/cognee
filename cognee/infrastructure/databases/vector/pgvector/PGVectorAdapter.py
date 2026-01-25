@@ -1,4 +1,5 @@
 import asyncio
+import os
 import re
 from typing import List, Optional, get_type_hints
 from sqlalchemy.inspection import inspect
@@ -367,6 +368,22 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
         # Use async session to connect to the database
         # Use async session to connect to the database
         async with self.get_async_session() as session:
+            # Optional per-session Postgres tuning for vector search.
+            # Keep this behind env vars so it can be tested safely in production-like runs.
+            work_mem = os.getenv("COGNEE_PGVECTOR_WORK_MEM")
+            eff_io = os.getenv("COGNEE_PGVECTOR_EFFECTIVE_IO_CONCURRENCY")
+            if work_mem:
+                await session.execute(text(f"SET LOCAL work_mem = '{work_mem}';"))
+            if eff_io:
+                try:
+                    eff_io_int = int(eff_io)
+                except ValueError:
+                    eff_io_int = None
+                if eff_io_int is not None:
+                    await session.execute(
+                        text(f"SET LOCAL effective_io_concurrency = {eff_io_int};")
+                    )
+
             # We only support 1536-dim (text-embedding-3-small) in this deployment.
             # Keep native `vector` so cosine HNSW indexes on `vector_cosine_ops` can be used.
             query_expr = bindparam("qvec", query_vector, type_=self.Vector(vector_size))

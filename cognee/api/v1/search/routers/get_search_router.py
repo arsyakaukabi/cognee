@@ -338,7 +338,8 @@ def get_search_router() -> APIRouter:
                 context_text = await get_context(
                     query=payload.query,
                     top_k=payload.top_k if payload.top_k else 10,
-                    # we could pass other params if needed
+                    dataset_ids=payload.dataset_ids,
+                    user=user,
                 )
                 if timing_on:
                     dur_ms = (time.perf_counter_ns() - t_ctx_start) / 1_000_000
