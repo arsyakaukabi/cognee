@@ -4,6 +4,7 @@ from collections import Counter
 
 from cognee.modules.graph.cognee_graph.CogneeGraphElements import Edge
 from cognee.modules.retrieval.utils.stop_words import DEFAULT_STOP_WORDS
+from cognee.shared.performance_utils import trace_perf
 
 
 def _get_top_n_frequent_words(
@@ -49,6 +50,7 @@ def _extract_nodes_from_edges(retrieved_edges: List[Edge]) -> dict:
     return nodes
 
 
+@trace_perf("resolve_edges_to_text", "graph")
 async def resolve_edges_to_text(retrieved_edges: List[Edge]) -> str:
     """Converts retrieved graph edges into a human-readable string format."""
     nodes = _extract_nodes_from_edges(retrieved_edges)

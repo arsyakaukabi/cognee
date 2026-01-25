@@ -13,10 +13,12 @@ from .mapper import (
     map_chunk_results_to_knowledge_ids
 )
 from .expander import expand_to_n_unique_knowledge_ids
+from cognee.shared.performance_utils import trace_perf, TraceSpan
 
 logger = get_logger("CustomSearch")
 
 
+@trace_perf("custom_search.search_knowledge_ids", "search")
 async def search_knowledge_ids(
     question: str,
     method: str = "graph",  # "graph" or "chunks"
@@ -42,32 +44,35 @@ async def search_knowledge_ids(
     # Execute search
     if method == "graph":
         logger.info(f"🔍 Searching using GRAPH_COMPLETION...")
-        search_results = await search_executor.execute_graph_completion_search(
-            question, 
-            top_k=initial_top_k
-        )
+        async with TraceSpan("search.execute_graph_completion_search", "search"):
+            search_results = await search_executor.execute_graph_completion_search(
+                question, 
+                top_k=initial_top_k
+            )
         
         # Map triplets to knowledge IDs with early stopping
-        knowledge_ids = await map_triplet_results_to_knowledge_ids(
-            search_results, 
-            graph_engine,
-            target_n=target_n
-        )
+        async with TraceSpan("search.map_triplet_results", "search"):
+            knowledge_ids = await map_triplet_results_to_knowledge_ids(
+                search_results, 
+                graph_engine,
+                target_n=target_n
+            )
         
         # Expand if needed to reach target_n
         if len(set(knowledge_ids)) < target_n:
             logger.info(f"   Initial search: {len(set(knowledge_ids))} unique IDs (target: {target_n})")
             logger.info(f"   Expanding search...")
-            knowledge_ids = await expand_to_n_unique_knowledge_ids(
-                search_results=search_results,
-                method="graph",
-                target_n=target_n,
-                graph_engine=graph_engine,
-                search_executor=search_executor,
-                query=question,
-                initial_top_k=initial_top_k,
-                max_top_k=200
-            )
+            async with TraceSpan("search.expand_to_n_unique", "search"):
+                knowledge_ids = await expand_to_n_unique_knowledge_ids(
+                    search_results=search_results,
+                    method="graph",
+                    target_n=target_n,
+                    graph_engine=graph_engine,
+                    search_executor=search_executor,
+                    query=question,
+                    initial_top_k=initial_top_k,
+                    max_top_k=200
+                )
         else:
             # Take only first target_n unique IDs
             unique_ids = []

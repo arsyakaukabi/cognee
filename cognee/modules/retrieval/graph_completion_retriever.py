@@ -21,6 +21,7 @@ from cognee.modules.engine.models.node_set import NodeSet
 from cognee.infrastructure.databases.graph import get_graph_engine
 from cognee.context_global_variables import session_user
 from cognee.infrastructure.databases.cache.config import CacheConfig
+from cognee.shared.performance_utils import trace_perf, TraceSpan
 
 logger = get_logger("GraphCompletionRetriever")
 
@@ -61,6 +62,7 @@ class GraphCompletionRetriever(BaseGraphRetriever):
         self.node_name = node_name
         self.triplet_distance_penalty = triplet_distance_penalty
 
+    @trace_perf("GraphCompletionRetriever.resolve_edges_to_text", "retrieval")
     async def resolve_edges_to_text(self, retrieved_edges: list) -> str:
         """
         Converts retrieved graph edges into a human-readable string format.
@@ -77,10 +79,11 @@ class GraphCompletionRetriever(BaseGraphRetriever):
         """
         return await resolve_edges_to_text(retrieved_edges)
 
+    @trace_perf("GraphCompletionRetriever.get_triplets", "retrieval")
     async def get_triplets(self, query: str) -> List[Edge]:
         """
         Retrieves relevant graph triplets based on a query string.
-
+        
         Parameters:
         -----------
 
@@ -103,18 +106,20 @@ class GraphCompletionRetriever(BaseGraphRetriever):
                         for field_name in index_fields:
                             vector_index_collections.append(f"{subclass.__name__}_{field_name}")
 
-        found_triplets = await brute_force_triplet_search(
-            query,
-            top_k=self.top_k,
-            collections=vector_index_collections or None,
-            node_type=self.node_type,
-            node_name=self.node_name,
-            wide_search_top_k=self.wide_search_top_k,
-            triplet_distance_penalty=self.triplet_distance_penalty,
-        )
+        async with TraceSpan("brute_force_triplet_search", "retrieval"):
+            found_triplets = await brute_force_triplet_search(
+                query,
+                top_k=self.top_k,
+                collections=vector_index_collections or None,
+                node_type=self.node_type,
+                node_name=self.node_name,
+                wide_search_top_k=self.wide_search_top_k,
+                triplet_distance_penalty=self.triplet_distance_penalty,
+            )
 
         return found_triplets
 
+    @trace_perf("GraphCompletionRetriever.get_context", "retrieval")
     async def get_context(self, query: str) -> List[Edge]:
         """
         Retrieves and resolves graph triplets into context based on a query.
