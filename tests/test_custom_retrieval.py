@@ -40,3 +40,26 @@ async def test_search_router_payload():
         top_k=5
     )
     assert payload.search_type == "graph_completion_custom"
+
+
+@pytest.mark.asyncio
+async def test_retrieve_with_summary():
+    """Test that retrieval includes summary field"""
+    with patch("cognee.modules.search.custom.search_knowledge_ids", new_callable=AsyncMock) as mock_search:
+        # Mock batch summary retrieval
+        with patch("cognee.api.v1.search.retrieval._get_summaries_batch", new_callable=AsyncMock) as mock_summary:
+            with patch("cognee.api.v1.search.retrieval.get_graph_engine", new_callable=AsyncMock):
+                
+                mock_search.return_value = ["produk__id1"]
+                mock_summary.return_value = {"produk__id1": "This is a test summary"}
+                
+                results = await retrieve(
+                    query="test query", 
+                    top_k=5, 
+                    search_type="graph_completion_custom"
+                )
+                
+                assert len(results) == 1
+                assert results[0].id_knowledge == "id1"
+                assert results[0].knowledge_type == "produk"
+                assert results[0].summary == "This is a test summary"

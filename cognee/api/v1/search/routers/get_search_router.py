@@ -57,6 +57,7 @@ class RetrievalDataDTO(OutDTO):
     """Single retrieval result data."""
     idKnowledge: str = Field(alias="idKnowledge")
     knowledgeType: str = Field(alias="knowledgeType")
+    summary: Optional[str] = Field(default=None, alias="summary")
 
 
 class RetrievalResponseDTO(OutDTO):
@@ -250,7 +251,11 @@ def get_search_router() -> APIRouter:
                 )
                 
                 data = [
-                    {"idKnowledge": r.id_knowledge, "knowledgeType": r.knowledge_type}
+                    {
+                        "idKnowledge": r.id_knowledge, 
+                        "knowledgeType": r.knowledge_type,
+                        "summary": r.summary
+                    }
                     for r in results
                 ]
             
