@@ -29,8 +29,12 @@ def parse_document_name(doc_name: str) -> Tuple[str, str]:
         - "wi__CXF3s535h4wvcsQ85Pgg9C" -> ("CXF3s535h4wvcsQ85Pgg9C", "wi")
         - "helpdesk__22y7j4AeCpcVQqdZ98bjra" -> ("22y7j4AeCpcVQqdZ98bjra", "helpdesk")
     """
-    if "__" in doc_name:
-        parts = doc_name.split("__", 1)
+    # # Prefer the canonical delimiter (`category__id`), but accept legacy `category_id`.
+    # if "__" in doc_name:
+    #     parts = doc_name.split("__", 1)
+    #     return parts[1], parts[0]  # (id, category)
+    if "_" in doc_name:
+        parts = doc_name.split("_", 1)
         return parts[1], parts[0]  # (id, category)
     return doc_name, "unknown"
 
