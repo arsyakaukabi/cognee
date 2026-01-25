@@ -54,6 +54,7 @@ class RetrievalResponseDTO(OutDTO):
     status: str
     message: str
     data: List[RetrievalDataDTO]
+    correlation_id: Optional[str] = None
 
 
 class ContextResponseDTO(OutDTO):
@@ -61,6 +62,7 @@ class ContextResponseDTO(OutDTO):
     status: str
     message: str
     data: str
+    correlation_id: Optional[str] = None
 
 
 def get_search_router() -> APIRouter:

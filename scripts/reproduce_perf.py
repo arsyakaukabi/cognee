@@ -27,7 +27,7 @@ def measure_retrieval(debug=True):
         if response.status_code == 200:
             print(f"Success! Duration: {duration:.2f}ms")
             data = response.json()
-            print(f"Correlation ID: {data.get('correlation_id', 'N/A')}")
+            print(f"Correlation ID: {data.get('correlationId', data.get('correlation_id', 'N/A'))}")
             print(f"Results: {len(data.get('data', []))}")
         else:
             print(f"Failed: {response.status_code}")
@@ -60,7 +60,7 @@ def measure_context(debug=True):
         if response.status_code == 200:
             print(f"Success! Duration: {duration:.2f}ms")
             data = response.json()
-            print(f"Correlation ID: {data.get('correlation_id', 'N/A')}")
+            print(f"Correlation ID: {data.get('correlationId', data.get('correlation_id', 'N/A'))}")
             print(f"Context Length: {len(str(data.get('data', '')))}")
         else:
             print(f"Failed: {response.status_code}")

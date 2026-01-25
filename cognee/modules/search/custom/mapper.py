@@ -2,6 +2,7 @@
 Map search results (triplets/chunks) to knowledge IDs (TextDocument.name).
 """
 
+import time
 from typing import List, Dict, Any, Set, Optional
 from cognee.modules.graph.cognee_graph.CogneeGraphElements import Edge
 from cognee.infrastructure.databases.graph.graph_db_interface import GraphDBInterface
@@ -13,56 +14,37 @@ logger = get_logger("CustomMapper")
 async def get_textdocument_for_chunk(chunk_id: str, graph_engine: GraphDBInterface) -> Optional[Dict[str, Any]]:
     """
     Get TextDocument node for a given DocumentChunk.
-    
-    Args:
-        chunk_id: DocumentChunk node ID
-        graph_engine: Graph database interface
-        
-    Returns:
-        TextDocument node data (dict) or None if not found
+    OPTIMIZED: Trusts edge semantics, skips node verification for speed.
     """
     try:
         edges = await graph_engine.get_edges(chunk_id)
         
         for edge in edges:
-            relationship_name = None
-            potential_doc_id = None
+            doc_id = None
+            doc_name = None
             
-            # Handle different edge formats
             if isinstance(edge, tuple):
                 if len(edge) == 4:
-                    # EdgeData format: (source_id, target_id, relationship_name, properties)
                     source_id, target_id, relationship_name, _ = edge
-                    # For "is_part_of" edge: source=DocumentChunk, target=TextDocument
                     if relationship_name == "is_part_of" and source_id == chunk_id:
-                        potential_doc_id = target_id
+                        doc_id = target_id
                 elif len(edge) == 3:
-                    # Kuzu format: (node1_dict, relationship_name, node2_dict)
                     node1_dict, relationship_name, node2_dict = edge
-                    node1_id = str(node1_dict.get("id", "")) if isinstance(node1_dict, dict) else None
-                    node2_id = str(node2_dict.get("id", "")) if isinstance(node2_dict, dict) else None
-                    
                     if relationship_name == "is_part_of":
-                        # If chunk is node1, then node2 is the document
-                        if node1_id == chunk_id:
-                            potential_doc_id = node2_id
-                        elif node2_id == chunk_id:
-                            potential_doc_id = node1_id
+                        node1_id = str(node1_dict.get("id", "")) if isinstance(node1_dict, dict) else None
+                        node2_id = str(node2_dict.get("id", "")) if isinstance(node2_dict, dict) else None
+                        
+                        # Extract document info directly from edge data (skip get_node)
+                        if node1_id == chunk_id and isinstance(node2_dict, dict):
+                            doc_id = node2_id
+                            doc_name = node2_dict.get("name")
+                        elif node2_id == chunk_id and isinstance(node1_dict, dict):
+                            doc_id = node1_id
+                            doc_name = node1_dict.get("name")
             
-            if potential_doc_id and relationship_name == "is_part_of":
-                try:
-                    doc_node = await graph_engine.get_node(potential_doc_id)
-                    if doc_node:
-                        node_type = doc_node.get("type", "") if isinstance(doc_node, dict) else getattr(doc_node, "type", "")
-                        if node_type == "TextDocument":
-                            return doc_node if isinstance(doc_node, dict) else {
-                                "id": getattr(doc_node, "id", None),
-                                "name": getattr(doc_node, "name", None),
-                                "type": node_type,
-                            }
-                except Exception as e:
-                    logger.warning(f"Error verifying document node {potential_doc_id}: {e}")
-                    continue
+            if doc_id:
+                # Return directly without verification
+                return {"id": doc_id, "name": doc_name, "type": "TextDocument"}
                     
     except Exception as e:
         logger.warning(f"Error querying edges for chunk {chunk_id}: {e}")
@@ -89,49 +71,33 @@ async def get_knowledge_id_from_textdocument(doc: Dict[str, Any]) -> str:
 async def get_documentchunks_for_entity(entity_id: str, graph_engine: GraphDBInterface) -> List[str]:
     """
     Get all DocumentChunk IDs that contain a given Entity.
-    
-    Args:
-        entity_id: Entity node ID
-        graph_engine: Graph database interface
-        
-    Returns:
-        List of DocumentChunk IDs
+    OPTIMIZED: Trusts edge semantics, skips node verification for speed.
     """
     chunk_ids = []
     try:
         edges = await graph_engine.get_edges(entity_id)
         
         for edge in edges:
-            relationship_name = None
-            potential_chunk_id = None
+            chunk_id = None
             
             if isinstance(edge, tuple):
                 if len(edge) == 4:
                     source_id, target_id, relationship_name, _ = edge
-                    # For "contains" edge: source=DocumentChunk, target=Entity
                     if relationship_name == "contains" and target_id == entity_id:
-                        potential_chunk_id = source_id
+                        chunk_id = source_id
                 elif len(edge) == 3:
                     node1_dict, relationship_name, node2_dict = edge
-                    node1_id = str(node1_dict.get("id", "")) if isinstance(node1_dict, dict) else None
-                    node2_id = str(node2_dict.get("id", "")) if isinstance(node2_dict, dict) else None
-                    
                     if relationship_name == "contains":
-                        if node1_id == entity_id:
-                            potential_chunk_id = node2_id
-                        elif node2_id == entity_id:
-                            potential_chunk_id = node1_id
+                        node1_id = str(node1_dict.get("id", "")) if isinstance(node1_dict, dict) else None
+                        node2_id = str(node2_dict.get("id", "")) if isinstance(node2_dict, dict) else None
+                        
+                        if node2_id == entity_id:
+                            chunk_id = node1_id
+                        elif node1_id == entity_id:
+                            chunk_id = node2_id
             
-            if potential_chunk_id and relationship_name == "contains":
-                try:
-                    chunk_node = await graph_engine.get_node(potential_chunk_id)
-                    if chunk_node:
-                        node_type = chunk_node.get("type", "") if isinstance(chunk_node, dict) else getattr(chunk_node, "type", "")
-                        if node_type == "DocumentChunk":
-                            chunk_ids.append(potential_chunk_id)
-                except Exception as e:
-                    logger.warning(f"Error verifying chunk node {potential_chunk_id}: {e}")
-                    continue
+            if chunk_id:
+                chunk_ids.append(chunk_id)
                     
     except Exception as e:
         logger.warning(f"Error querying edges for entity {entity_id}: {e}")
@@ -142,49 +108,33 @@ async def get_documentchunks_for_entity(entity_id: str, graph_engine: GraphDBInt
 async def get_entities_for_entitytype(entitytype_id: str, graph_engine: GraphDBInterface) -> List[str]:
     """
     Get all Entity IDs that have a given EntityType.
-    
-    Args:
-        entitytype_id: EntityType node ID
-        graph_engine: Graph database interface
-        
-    Returns:
-        List of Entity IDs
+    OPTIMIZED: Trusts edge semantics, skips node verification for speed.
     """
     entity_ids = []
     try:
         edges = await graph_engine.get_edges(entitytype_id)
         
         for edge in edges:
-            relationship_name = None
-            potential_entity_id = None
+            entity_id = None
             
             if isinstance(edge, tuple):
                 if len(edge) == 4:
                     source_id, target_id, relationship_name, _ = edge
-                    # For "is_a" edge: source=Entity, target=EntityType
                     if relationship_name == "is_a" and target_id == entitytype_id:
-                        potential_entity_id = source_id
+                        entity_id = source_id
                 elif len(edge) == 3:
                     node1_dict, relationship_name, node2_dict = edge
-                    node1_id = str(node1_dict.get("id", "")) if isinstance(node1_dict, dict) else None
-                    node2_id = str(node2_dict.get("id", "")) if isinstance(node2_dict, dict) else None
-                    
                     if relationship_name == "is_a":
-                        if node1_id == entitytype_id:
-                            potential_entity_id = node2_id
-                        elif node2_id == entitytype_id:
-                            potential_entity_id = node1_id
+                        node1_id = str(node1_dict.get("id", "")) if isinstance(node1_dict, dict) else None
+                        node2_id = str(node2_dict.get("id", "")) if isinstance(node2_dict, dict) else None
+                        
+                        if node2_id == entitytype_id:
+                            entity_id = node1_id
+                        elif node1_id == entitytype_id:
+                            entity_id = node2_id
             
-            if potential_entity_id and relationship_name == "is_a":
-                try:
-                    entity_node = await graph_engine.get_node(potential_entity_id)
-                    if entity_node:
-                        node_type = entity_node.get("type", "") if isinstance(entity_node, dict) else getattr(entity_node, "type", "")
-                        if node_type == "Entity":
-                            entity_ids.append(potential_entity_id)
-                except Exception as e:
-                    logger.warning(f"Error verifying entity node {potential_entity_id}: {e}")
-                    continue
+            if entity_id:
+                entity_ids.append(entity_id)
                     
     except Exception as e:
         logger.warning(f"Error querying edges for entitytype {entitytype_id}: {e}")
@@ -250,25 +200,22 @@ async def map_triplet_results_to_knowledge_ids(
     
     Preserves order from triplet ranking (first occurrence of knowledge ID wins).
     Supports early stopping when target_n unique IDs are found.
-    
-    Args:
-        triplets: List of Edge objects (triplets) from GraphCompletionRetriever
-        graph_engine: Graph database interface
-        target_n: Optional target number of unique IDs. If set, stops early once reached.
-        
-    Returns:
-        List of knowledge IDs (may have duplicates, ordered by triplet rank)
     """
+    func_start = time.time()
+    
     knowledge_ids = []
-    seen_ids = set()  # For deduplication while preserving order
+    seen_ids = set()
+    
+    triplet_count = len(triplets)
+    node_map_count = 0
+    graph_query_time = 0.0
     
     for triplet in triplets:
-        # Early stopping: check if we already have enough unique IDs
+        # Early stopping
         if target_n and len(knowledge_ids) >= target_n:
-            logger.debug(f"Early stopping: reached {len(knowledge_ids)} unique IDs (target: {target_n})")
             break
             
-        # Extract nodes from triplet
+        # Extract nodes
         node1_id = str(triplet.node1.id) if hasattr(triplet.node1, "id") else None
         node2_id = str(triplet.node2.id) if hasattr(triplet.node2, "id") else None
         
@@ -277,22 +224,37 @@ async def map_triplet_results_to_knowledge_ids(
         
         # Map node1
         if node1_id and node1_type:
+            node_start = time.time()
             mapped_ids = await map_node_to_knowledge_ids(node1_id, node1_type, graph_engine)
+            graph_query_time += (time.time() - node_start)
+            node_map_count += 1
+            
             for kid in mapped_ids:
                 if kid not in seen_ids:
                     knowledge_ids.append(kid)
                     seen_ids.add(kid)
         
-        # Map node2 (skip if we already have enough)
+        # Map node2
         if target_n and len(knowledge_ids) >= target_n:
             continue
             
         if node2_id and node2_type:
+            node_start = time.time()
             mapped_ids = await map_node_to_knowledge_ids(node2_id, node2_type, graph_engine)
+            graph_query_time += (time.time() - node_start)
+            node_map_count += 1
+            
             for kid in mapped_ids:
                 if kid not in seen_ids:
                     knowledge_ids.append(kid)
                     seen_ids.add(kid)
+    
+    func_duration = (time.time() - func_start) * 1000
+    logger.info(
+        f"⏱️ [MAP_TRIPLETS] Total: {func_duration:.2f}ms | "
+        f"Triplets: {triplet_count} | Nodes mapped: {node_map_count} | "
+        f"Graph queries: {graph_query_time*1000:.2f}ms | Results: {len(knowledge_ids)}"
+    )
     
     return knowledge_ids
 

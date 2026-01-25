@@ -146,7 +146,21 @@ async def brute_force_triplet_search(
         logger.error("Failed to initialize vector engine: %s", e)
         raise RuntimeError("Initialization error") from e
 
+    # Filter to collections that actually exist to avoid wasted queries/errors.
+    # This does not change quality because missing collections already return empty results.
+    # if collections:
+    #     exists_flags = await asyncio.gather(
+    #         *[vector_engine.has_collection(collection_name) for collection_name in collections]
+    #     )
+    #     collections = [c for c, ok in zip(collections, exists_flags) if ok]
+
+    # ========== STEP 0: Embed Query ==========
+    step0_start = time.time()
     query_vector = (await vector_engine.embedding_engine.embed_text([query]))[0]
+    step0_duration = (time.time() - step0_start) * 1000
+    logger.info(
+        f"⏱️ [STEP 0] Embed Query: {step0_duration:.2f}ms"
+    )
 
     async def search_in_collection(collection_name: str):
         try:
@@ -157,8 +171,9 @@ async def brute_force_triplet_search(
             return []
 
     try:
-        start_time = time.time()
-
+        # ========== STEP 1: Vector Search ==========
+        step1_start = time.time()
+        
         results = await asyncio.gather(
             *[search_in_collection(collection_name) for collection_name in collections]
         )
@@ -166,14 +181,15 @@ async def brute_force_triplet_search(
         if all(not item for item in results):
             return []
 
-        # Final statistics
-        vector_collection_search_time = time.time() - start_time
+        step1_duration = (time.time() - step1_start) * 1000
         logger.info(
-            f"Vector collection retrieval completed: Retrieved distances from {sum(1 for res in results if res)} collections in {vector_collection_search_time:.2f}s"
+            f"⏱️ [STEP 1] Vector Search: {step1_duration:.2f}ms (6 collections parallel)"
         )
 
+        # ========== STEP 2: Build node_distances dict ==========
+        step2_start = time.time()
+        
         node_distances = {collection: result for collection, result in zip(collections, results)}
-
         edge_distances = node_distances.get("EdgeType_relationship_name", None)
 
         if wide_search_limit is not None:
@@ -189,7 +205,15 @@ async def brute_force_triplet_search(
             )
         else:
             relevant_ids_to_filter = None
+        
+        step2_duration = (time.time() - step2_start) * 1000
+        logger.info(
+            f"⏱️ [STEP 2] Build node_distances: {step2_duration:.2f}ms ({len(relevant_ids_to_filter or [])} unique IDs)"
+        )
 
+        # ========== STEP 3: Get Memory Fragment (Graph Projection) ==========
+        step3_start = time.time()
+        
         if memory_fragment is None:
             memory_fragment = await get_memory_fragment(
                 properties_to_project=properties_to_project,
@@ -198,11 +222,47 @@ async def brute_force_triplet_search(
                 relevant_ids_to_filter=relevant_ids_to_filter,
                 triplet_distance_penalty=triplet_distance_penalty,
             )
+        
+        step3_duration = (time.time() - step3_start) * 1000
+        logger.info(
+            f"⏱️ [STEP 3] Graph Projection (get_memory_fragment): {step3_duration:.2f}ms"
+        )
 
+        # ========== STEP 4: Map vector distances to nodes ==========
+        step4_start = time.time()
+        
         await memory_fragment.map_vector_distances_to_graph_nodes(node_distances=node_distances)
-        await memory_fragment.map_vector_distances_to_graph_edges(edge_distances=edge_distances)
+        
+        step4_duration = (time.time() - step4_start) * 1000
+        logger.info(
+            f"⏱️ [STEP 4] Map distances to nodes: {step4_duration:.2f}ms"
+        )
 
+        # ========== STEP 5: Map vector distances to edges ==========
+        step5_start = time.time()
+        
+        await memory_fragment.map_vector_distances_to_graph_edges(edge_distances=edge_distances)
+        
+        step5_duration = (time.time() - step5_start) * 1000
+        logger.info(
+            f"⏱️ [STEP 5] Map distances to edges: {step5_duration:.2f}ms"
+        )
+
+        # ========== STEP 6: Calculate top triplet importances ==========
+        step6_start = time.time()
+        
         results = await memory_fragment.calculate_top_triplet_importances(k=top_k)
+        
+        step6_duration = (time.time() - step6_start) * 1000
+        logger.info(
+            f"⏱️ [STEP 6] Calculate triplet importances: {step6_duration:.2f}ms (top_k={top_k})"
+        )
+
+        # ========== SUMMARY ==========
+        total_duration = step1_duration + step2_duration + step3_duration + step4_duration + step5_duration + step6_duration
+        logger.info(
+            f"⏱️ [TOTAL] brute_force_triplet_search: {total_duration:.2f}ms"
+        )
 
         return results
 
@@ -215,3 +275,4 @@ async def brute_force_triplet_search(
             error,
         )
         raise error
+
