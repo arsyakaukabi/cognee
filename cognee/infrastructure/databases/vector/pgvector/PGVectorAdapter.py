@@ -1,9 +1,10 @@
 import asyncio
+import re
 from typing import List, Optional, get_type_hints
 from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy import JSON, Column, Table, select, delete, MetaData, func
+from sqlalchemy.dialects.postgresql import insert, UUID as PG_UUID
+from sqlalchemy import JSON, Column, Table, select, delete, MetaData, func, bindparam, Float
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.exc import ProgrammingError
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
@@ -72,6 +73,7 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
         from pgvector.sqlalchemy import Vector
 
         self.Vector = Vector
+        self._collection_models: dict[str, type[Base]] = {}
 
     async def embed_data(self, data: list[str]) -> list[list[float]]:
         """
@@ -308,34 +310,72 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
         if query_text and not query_vector:
             query_vector = (await self.embedding_engine.embed_text([query_text]))[0]
 
-        # Get PGVectorDataPoint Table from database
-        PGVectorDataPoint = await self.get_table(collection_name)
-
-        if limit is None:
-            async with self.get_async_session() as session:
-                query = select(func.count()).select_from(PGVectorDataPoint)
-                result = await session.execute(query)
-                limit = result.scalar_one()
-
-        # If limit is still 0, no need to do the search, just return empty results
-        if limit <= 0:
-            return []
+        from uuid import UUID
 
         # NOTE: This needs to be initialized in case search doesn't return a value
         closest_items = []
 
+        vector_size = self.embedding_engine.get_vector_size()
+        if query_vector is not None and len(query_vector) != vector_size:
+            raise ValueError(
+                f"Query vector dim {len(query_vector)} does not match embedding dim {vector_size}."
+            )
+
+        # Build a lightweight ORM model once per collection to avoid repeated class re-definition
+        # (which causes SAWarning spam) and to avoid table reflection overhead.
+        PGVectorDataPoint = self._collection_models.get(collection_name)
+        if PGVectorDataPoint is None:
+            safe_name = re.sub(r"[^0-9A-Za-z_]", "_", collection_name)
+            class_name = f"PGVectorDataPoint_{safe_name}"
+            PGVectorDataPoint = type(
+                class_name,
+                (Base,),
+                {
+                    "__tablename__": collection_name,
+                    "__table_args__": {"extend_existing": True},
+                    "__annotations__": {"id": Mapped[UUID]},
+                    "id": mapped_column(PG_UUID(as_uuid=True), primary_key=True),
+                    "payload": Column(JSON),
+                    "vector": Column(self.Vector(vector_size)),
+                },
+            )
+            self._collection_models[collection_name] = PGVectorDataPoint
+
+        # Use async session to connect to the database
         # Use async session to connect to the database
         async with self.get_async_session() as session:
-            query = select(
-                PGVectorDataPoint,
-                PGVectorDataPoint.c.vector.cosine_distance(query_vector).label("similarity"),
-            ).order_by("similarity")
+            # We only support 1536-dim (text-embedding-3-small) in this deployment.
+            # Keep native `vector` so cosine HNSW indexes on `vector_cosine_ops` can be used.
+            query_expr = bindparam("qvec", query_vector, type_=self.Vector(vector_size))
+            vector_expr = PGVectorDataPoint.vector
 
-            if limit > 0:
+            # Force result type to float, otherwise SQLAlchemy may apply the pgvector
+            # result processor to the distance column (and crash when it receives a float).
+            similarity_expr = func.cast(vector_expr.op("<=>")(query_expr), Float).label("similarity")
+
+            query = (
+                select(
+                    PGVectorDataPoint.id,
+                    PGVectorDataPoint.payload,
+                    similarity_expr,
+                )
+                .where(PGVectorDataPoint.vector.is_not(None))
+                .order_by(similarity_expr)
+            )
+
+            if limit is not None and limit > 0:
                 query = query.limit(limit)
 
             # Find closest vectors to query_vector
-            closest_items = await session.execute(query)
+            try:
+                closest_items = await session.execute(query)
+            except ProgrammingError as e:
+                if "does not exist" in str(e):
+                    # Table does not exist, return empty results
+                    # This mimics the behavior of filtered search_in_collection handling CollectionNotFoundError
+                    # but doing it here prevents the crash without needing overhead of checking existence first
+                    return []
+                raise e
 
         vector_list = []
 
