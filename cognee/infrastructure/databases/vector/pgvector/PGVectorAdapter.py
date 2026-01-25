@@ -378,7 +378,17 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
 
             # Find closest vectors to query_vector
             try:
+                # Force index usage by determining that sequential scan is expensive
+                # This is necessary because for smaller tables (<100k rows) Postgres often prefers Seq Scan
+                # even when HNSW is 10x faster.
+                from sqlalchemy import text
+                await session.execute(text("SET enable_seqscan = off"))
+
+                import time
+                start_db = time.time()
                 closest_items = await session.execute(query)
+                db_duration_ms = (time.time() - start_db) * 1000
+                logger.info(f"⚡ [DB Vector Search] Collection: {collection_name} | Duration: {db_duration_ms:.4f} ms")
             except ProgrammingError as e:
                 if "does not exist" in str(e):
                     # Table does not exist, return empty results

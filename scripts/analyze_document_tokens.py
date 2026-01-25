@@ -20,7 +20,7 @@ import asyncpg
 DB_CONFIG = {
     "host": "127.0.0.1",
     "port": 5432,
-    "database": "bribrain_knowledge_base",
+    "database": "bribrain_knowledge_base_hnsw",
     "user": "admin",
     "password": "admin",
 }

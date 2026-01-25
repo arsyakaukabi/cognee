@@ -10,7 +10,7 @@
 -- ⚠️  PASTIKAN SUDAH BACKUP DATABASE SEBELUM MENJALANKAN INI!
 --
 -- Jalankan dengan:
---   psql -h 127.0.0.1 -U admin -d bribrain_knowledge_base -f scripts/embedding_migration/alter_dimension.sql
+--   psql -h 127.0.0.1 -U admin -d bribrain_knowledge_base_hnsw -f scripts/embedding_migration/alter_dimension.sql
 -- ============================================================
 
 -- Step 1: Verifikasi kondisi saat ini

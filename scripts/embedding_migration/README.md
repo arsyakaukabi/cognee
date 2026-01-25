@@ -58,7 +58,7 @@ python scripts/embedding_migration/01_summary.py
 
 ```bash
 # Backup
-pg_dump -h 127.0.0.1 -U admin -d bribrain_knowledge_base \
+pg_dump -h 127.0.0.1 -U admin -d bribrain_knowledge_base_hnsw \
     -F c -f backup_pre_migration_$(date +%Y%m%d).dump
 ```
 
@@ -68,7 +68,7 @@ pg_dump -h 127.0.0.1 -U admin -d bribrain_knowledge_base \
 **Jalankan script SQL untuk ALTER column:**
 
 ```bash
-PGPASSWORD=admin psql -h 127.0.0.1 -U admin -d bribrain_knowledge_base \
+PGPASSWORD=admin psql -h 127.0.0.1 -U admin -d bribrain_knowledge_base_hnsw \
     -f scripts/embedding_migration/alter_dimension.sql
 ```
 
@@ -175,7 +175,7 @@ Jika migrasi gagal dan perlu rollback:
 
 ```bash
 # Restore dari backup
-pg_restore -h 127.0.0.1 -U admin -d bribrain_knowledge_base \
+pg_restore -h 127.0.0.1 -U admin -d bribrain_knowledge_base_hnsw \
     -c backup_pre_migration_XXXXXXXX.dump
 ```
 

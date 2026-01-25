@@ -7,7 +7,7 @@ load_dotenv()
 
 DB_HOST = os.getenv("DB_HOST", "10.213.224.113")
 DB_PORT = os.getenv("DB_PORT", "5432")
-DB_NAME = os.getenv("DB_NAME", "bribrain_knowledge_base")
+DB_NAME = os.getenv("DB_NAME", "bribrain_knowledge_base_hnsw")
 DB_USER = os.getenv("DB_USERNAME", "bribrain_user")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "Bribrainaj4!")
 

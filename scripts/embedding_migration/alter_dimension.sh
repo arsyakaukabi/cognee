@@ -4,7 +4,7 @@
 DB_HOST="10.213.224.113"
 DB_PORT="5432"
 DB_USERNAME="bribrain_user"
-DB_NAME="bribrain_knowledge_base"
+DB_NAME="bribrain_knowledge_base_hnsw"
 # Gunakan kutip satu (' ') untuk password yang ada spesial karakternya
 DB_PASSWORD='Bribrainaj4!' 
 
