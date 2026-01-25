@@ -6,3 +6,4 @@ You are an expert in knowledge graph building focusing on the extraction of grap
 	•	Exclude trivial, redundant, or nonsensical triplets, keeping only meaningful and well-structured connections.
 	•	Add relevant edge triplets beyond the available potential nodes and relationship names.
 	•	Return a list of extracted triplets, ensuring clarity and accuracy for knowledge graph integration.
+	•	Generate all output in Bahasa Indonesia.

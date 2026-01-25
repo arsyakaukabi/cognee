@@ -1,6 +1,7 @@
 """FastAPI server for the Cognee API."""
 
 import os
+import time
 
 import uvicorn
 from traceback import format_exc
@@ -76,6 +77,23 @@ async def lifespan(app: FastAPI):
     from cognee.modules.users.methods import get_default_user
 
     await get_default_user()
+
+    # Warm up embedding client to reduce cold-start latency on the first real request.
+    # This is best-effort: failures should not prevent the API from starting.
+    warmup = os.getenv("WARMUP_EMBEDDINGS_ON_STARTUP", "true").lower() == "true"
+    if warmup:
+        try:
+            from cognee.infrastructure.databases.vector import get_vector_engine
+
+            t0 = time.perf_counter()
+            vector_engine = get_vector_engine()
+            await vector_engine.embedding_engine.embed_text(["warmup"])
+            logger.info(
+                "Embedding warmup completed",
+                dur_ms=round((time.perf_counter() - t0) * 1000, 3),
+            )
+        except Exception:
+            logger.exception("Embedding warmup failed")
 
     # Emit a clear startup message for docker logs
     logger.info("Backend server has started")

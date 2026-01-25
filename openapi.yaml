@@ -1,0 +1,166 @@
+openapi: 3.0.3
+info:
+  title: Cognee Retrieval & Context API
+  description: API documentation for retrieval and context endpoints.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8100/api/v1
+    description: Local Development Server
+
+paths:
+  /search/retrieval:
+    post:
+      summary: Retrieve document IDs and types
+      description: |
+        Retrieves document IDs and knowledge types based on the query.
+        Supports 'chunks' (vector search only) and 'graph_completion' (graph + vector) search types.
+      tags:
+        - Search
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - query
+              properties:
+                query:
+                  type: string
+                  example: "Apa syarat pembukaan rekening BritAma Valas?"
+                  description: The search query text.
+                top_k:
+                  type: integer
+                  default: 10
+                  example: 5
+                  description: Maximum number of results to return.
+                search_type:
+                  type: string
+                  default: "chunks"
+                  enum: ["chunks", "graph_completion"]
+                  description: The strategy to use for retrieval.
+      responses:
+        '200':
+          description: Successful retrieval response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "Retrieval successful"
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        idKnowledge:
+                          type: string
+                          example: "nfyCCSJM8rtsnZSTWDmyrK"
+                        knowledgeType:
+                          type: string
+                          example: "produk"
+        '409':
+          description: Conflict or processing error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "error"
+                  message:
+                    type: string
+                    example: "Error description"
+                  data:
+                    type: array
+                    items: {}
+
+  /search/context:
+    post:
+      summary: Get resolved graph context
+      description: |
+        Retrieves knowledge graph triplets based on the query and resolves them into human-readable text.
+        Useful for RAG applications to get context before LLM generation.
+      tags:
+        - Search
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - query
+              properties:
+                query:
+                  type: string
+                  example: "Apa syarat pembukaan rekening BritAma Valas?"
+                top_k:
+                  type: integer
+                  default: 10
+                  example: 5
+                datasets:
+                  type: array
+                  items:
+                    type: string
+                  nullable: true
+                dataset_ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                  nullable: true
+                search_type:
+                  type: string
+                  description: Ignored for context endpoint
+      responses:
+        '200':
+          description: Successful context retrieval
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "Context retrieved successfully"
+                  data:
+                    type: string
+                    description: Resolved text containing Nodes and Connections
+                    example: "Nodes:\nNode: Title...\n\nConnections:\nA --[rel]--> B"
+        '409':
+          description: Conflict or processing error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "error"
+                  message:
+                    type: string
+                    example: "Error description"
+                  data:
+                    type: string
+                    example: ""
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

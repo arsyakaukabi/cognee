@@ -192,6 +192,13 @@ cognee/cache/
 
 node_modules/
 
+# Local agent/codex artifacts (not part of upstream repo)
+.agent/
+.codex/
+
+# Local backups / dumps
+*.tgz
+
 # Evals
 SWE-bench_testsample/
 

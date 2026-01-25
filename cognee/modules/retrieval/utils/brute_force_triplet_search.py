@@ -3,6 +3,7 @@ import time
 from typing import List, Optional, Type
 
 from cognee.shared.logging_utils import get_logger, ERROR
+from cognee.shared.performance_utils import get_correlation_id, debug_trace_enabled
 from cognee.modules.graph.exceptions.exceptions import EntityNotFoundError
 from cognee.infrastructure.databases.vector.exceptions import CollectionNotFoundError
 from cognee.infrastructure.databases.graph import get_graph_engine
@@ -13,6 +14,7 @@ from cognee.modules.users.models import User
 from cognee.shared.utils import send_telemetry
 
 logger = get_logger(level=ERROR)
+timing_logger = get_logger("timing")
 
 
 def format_triplets(edges):
@@ -99,7 +101,7 @@ async def brute_force_triplet_search(
     memory_fragment: Optional[CogneeGraph] = None,
     node_type: Optional[Type] = None,
     node_name: Optional[List[str]] = None,
-    wide_search_top_k: Optional[int] = 100,
+    wide_search_top_k: Optional[int] = 50,
     triplet_distance_penalty: Optional[float] = 3.5,
 ) -> List[Edge]:
     """
@@ -129,6 +131,9 @@ async def brute_force_triplet_search(
 
     wide_search_limit = wide_search_top_k if non_global_search else None
 
+    timing_on = debug_trace_enabled.get()
+    request_id = get_correlation_id() if timing_on else None
+
     if collections is None:
         collections = [
             "Entity_name",
@@ -146,7 +151,24 @@ async def brute_force_triplet_search(
         logger.error("Failed to initialize vector engine: %s", e)
         raise RuntimeError("Initialization error") from e
 
+    # Filter to collections that actually exist to avoid wasted queries/errors.
+    # This does not change quality because missing collections already return empty results.
+    if collections:
+        exists_flags = await asyncio.gather(
+            *[vector_engine.has_collection(collection_name) for collection_name in collections]
+        )
+        collections = [c for c, ok in zip(collections, exists_flags) if ok]
+
+    t_embed_start = time.perf_counter_ns() if timing_on else 0
     query_vector = (await vector_engine.embedding_engine.embed_text([query]))[0]
+    if timing_on:
+        dur_ms = (time.perf_counter_ns() - t_embed_start) / 1_000_000
+        timing_logger.info(
+            "bf_embed",
+            fn="brute_force_triplet_search -> embedding_engine.embed_text",
+            request_id=request_id,
+            dur_ms=round(dur_ms, 3),
+        )
 
     async def search_in_collection(collection_name: str):
         try:
@@ -158,10 +180,20 @@ async def brute_force_triplet_search(
 
     try:
         start_time = time.time()
+        t_vector_start = time.perf_counter_ns() if timing_on else 0
 
         results = await asyncio.gather(
             *[search_in_collection(collection_name) for collection_name in collections]
         )
+        if timing_on:
+            dur_ms = (time.perf_counter_ns() - t_vector_start) / 1_000_000
+            timing_logger.info(
+                "bf_vector_search",
+                fn="brute_force_triplet_search -> vector_engine.search (asyncio.gather)",
+                request_id=request_id,
+                collections=len(collections),
+                dur_ms=round(dur_ms, 3),
+            )
 
         if all(not item for item in results):
             return []
@@ -191,6 +223,7 @@ async def brute_force_triplet_search(
             relevant_ids_to_filter = None
 
         if memory_fragment is None:
+            t_fragment_start = time.perf_counter_ns() if timing_on else 0
             memory_fragment = await get_memory_fragment(
                 properties_to_project=properties_to_project,
                 node_type=node_type,
@@ -198,11 +231,37 @@ async def brute_force_triplet_search(
                 relevant_ids_to_filter=relevant_ids_to_filter,
                 triplet_distance_penalty=triplet_distance_penalty,
             )
+            if timing_on:
+                dur_ms = (time.perf_counter_ns() - t_fragment_start) / 1_000_000
+                timing_logger.info(
+                    "bf_graph_project",
+                    fn="brute_force_triplet_search -> get_memory_fragment",
+                    request_id=request_id,
+                    dur_ms=round(dur_ms, 3),
+                )
 
+        t_map_start = time.perf_counter_ns() if timing_on else 0
         await memory_fragment.map_vector_distances_to_graph_nodes(node_distances=node_distances)
         await memory_fragment.map_vector_distances_to_graph_edges(edge_distances=edge_distances)
+        if timing_on:
+            dur_ms = (time.perf_counter_ns() - t_map_start) / 1_000_000
+            timing_logger.info(
+                "bf_map_distances",
+                fn="brute_force_triplet_search -> map_vector_distances_to_graph_*",
+                request_id=request_id,
+                dur_ms=round(dur_ms, 3),
+            )
 
+        t_rank_start = time.perf_counter_ns() if timing_on else 0
         results = await memory_fragment.calculate_top_triplet_importances(k=top_k)
+        if timing_on:
+            dur_ms = (time.perf_counter_ns() - t_rank_start) / 1_000_000
+            timing_logger.info(
+                "bf_rank",
+                fn="brute_force_triplet_search -> calculate_top_triplet_importances",
+                request_id=request_id,
+                dur_ms=round(dur_ms, 3),
+            )
 
         return results
 

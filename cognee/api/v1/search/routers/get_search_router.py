@@ -1,8 +1,9 @@
-from uuid import UUID
+from uuid import UUID, uuid4
 from typing import Optional, Union, List, Any
 from datetime import datetime
+import time
 from pydantic import Field
-from fastapi import Depends, APIRouter
+from fastapi import Depends, APIRouter, Request
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 
@@ -13,7 +14,17 @@ from cognee.modules.users.models import User
 from cognee.modules.search.operations import get_history
 from cognee.modules.users.methods import get_authenticated_user
 from cognee.shared.utils import send_telemetry
+from cognee.shared.performance_utils import (
+    get_correlation_id,
+    set_debug_trace,
+    TraceSpan,
+    request_correlation_id,
+    debug_trace_enabled,
+)
+from cognee.shared.logging_utils import get_logger
 from cognee import __version__ as cognee_version
+
+timing_logger = get_logger("timing")
 
 
 # Note: Datasets sent by name will only map to datasets owned by the request sender
@@ -30,6 +41,37 @@ class SearchPayloadDTO(InDTO):
     top_k: Optional[int] = Field(default=10)
     only_context: bool = Field(default=False)
     use_combined_context: bool = Field(default=False)
+
+
+class RetrievalPayloadDTO(InDTO):
+    """Payload for retrieval endpoint."""
+    query: str = Field(description="Search query text")
+    top_k: int = Field(default=10, description="Maximum number of results to return")
+    search_type: str = Field(
+        default="chunks",
+        description="Search type: 'chunks', 'graph_completion', or 'graph_completion_custom'"
+    )
+
+
+class RetrievalDataDTO(OutDTO):
+    """Single retrieval result data."""
+    idKnowledge: str = Field(alias="idKnowledge")
+    knowledgeType: str = Field(alias="knowledgeType")
+    summary: Optional[str] = Field(default=None, alias="summary")
+
+
+class RetrievalResponseDTO(OutDTO):
+    """Standard API response for retrieval."""
+    status: str
+    message: str
+    data: List[RetrievalDataDTO]
+
+
+class ContextResponseDTO(OutDTO):
+    """Standard API response for context retrieval."""
+    status: str
+    message: str
+    data: str
 
 
 def get_search_router() -> APIRouter:
@@ -142,5 +184,195 @@ def get_search_router() -> APIRouter:
             return []
         except Exception as error:
             return JSONResponse(status_code=409, content={"error": str(error)})
+
+    @router.post("/retrieval", response_model=RetrievalResponseDTO)
+    async def retrieval_search(
+        payload: RetrievalPayloadDTO,
+        request: Request,
+        user: User = Depends(get_authenticated_user)
+    ):
+        """
+        Retrieval endpoint for testing purposes.
+        
+        Returns document IDs and their knowledge types from CHUNKS or GRAPH_COMPLETION search.
+        
+        ## Request Parameters
+        - **query** (str): The search query text
+        - **top_k** (int): Maximum number of results to return (default: 10)
+        - **search_type** (str): Either "chunks", "graph_completion", or "graph_completion_custom"
+        
+        ## Response
+        Returns a structured response containing:
+        - **status**: "success" or "error"
+        - **message**: Description of the result
+        - **data**: List of retrieval results
+        
+        ## Example Response
+        ```json
+        {
+          "status": "success",
+          "message": "Retrieval successful",
+          "data": [
+            {"idKnowledge": "nfyCCSJM8rtsnZSTWDmyrK", "knowledgeType": "produk"}
+          ]
+        }
+        ```
+        """
+        # --- Instrumentation Start ---
+        cid = str(uuid4())
+        request_correlation_id.set(cid)
+        
+        # Check for debug header
+        debug_trace = request.headers.get("X-Debug-Trace", "").lower() == "true"
+        set_debug_trace(debug_trace)
+        # --- Instrumentation End ---
+
+        send_telemetry(
+            "Retrieval API Endpoint Invoked",
+            user.id,
+            additional_properties={
+                "endpoint": "POST /v1/search/retrieval",
+                "search_type": payload.search_type,
+                "query": payload.query[:100],
+                "top_k": payload.top_k,
+                "cognee_version": cognee_version,
+                "correlation_id": cid,
+            },
+        )
+
+        from cognee.api.v1.search.retrieval import retrieve
+
+        try:
+            async with TraceSpan(name="api.retrieval_search", component="api"):
+                results = await retrieve(
+                    query=payload.query,
+                    top_k=payload.top_k,
+                    search_type=payload.search_type
+                )
+                
+                data = [
+                    {
+                        "idKnowledge": r.id_knowledge, 
+                        "knowledgeType": r.knowledge_type,
+                        "summary": r.summary
+                    }
+                    for r in results
+                ]
+            
+            return jsonable_encoder({
+                "status": "success",
+                "message": "Retrieval successful",
+                "data": data,
+                "correlation_id": cid
+            })
+        except Exception as error:
+            return JSONResponse(status_code=409, content={"status": "error", "message": str(error), "data": [], "correlation_id": cid})
+
+    @router.post("/context", response_model=ContextResponseDTO)
+    async def context_search(
+        payload: SearchPayloadDTO,
+        request: Request,
+        user: User = Depends(get_authenticated_user)
+    ):
+        """
+        Get resolved context text for a query.
+        
+        Retrieves triplets from the graph based on the query and resolves them into a human-readable text.
+        This uses the same logic as the graph completion retriever's context generation step.
+        
+        ## Request Parameters
+        Uses standard SearchPayloadDTO:
+        - **query** (str): The search query text
+        - **top_k** (int): Maximum number of results/triplets to consider (default: 10)
+        - **search_type**: (Ignored, always uses graph context logic)
+        
+        ## Response
+        Returns a structured response containing:
+        - **status**: "success" or "error"
+        - **message**: Description
+        - **data**: The resolved context text string (Nodes and Connections)
+        """
+        # --- Instrumentation Start ---
+        cid = str(uuid4())
+        request_correlation_id.set(cid)
+
+        debug_trace = request.headers.get("X-Debug-Trace", "").lower() == "true"
+        set_debug_trace(debug_trace)
+        # --- Instrumentation End ---
+        timing_on = debug_trace_enabled.get()
+        t_req_start = time.perf_counter_ns()
+        if timing_on:
+            timing_logger.info(
+                "ctx_request_start",
+                fn="context_search",
+                request_id=cid,
+                path="/api/v1/search/context",
+                query_len=len(payload.query or ""),
+                top_k=payload.top_k,
+                t_ns=t_req_start,
+            )
+
+        send_telemetry(
+            "Context API Endpoint Invoked",
+            user.id,
+            additional_properties={
+                "endpoint": "POST /v1/search/context",
+                "query": payload.query[:100],
+                "top_k": payload.top_k,
+                "cognee_version": cognee_version,
+                "correlation_id": cid,
+            },
+        )
+
+        from cognee.api.v1.search.context import get_context
+
+        result_status = "error"
+        try:
+            # We use payload.top_k or split wide_search_top_k if needed, 
+            # but for now passing top_k is sufficient.
+            async with TraceSpan(name="api.context_search", component="api"):
+                if timing_on:
+                    t_ctx_start = time.perf_counter_ns()
+                    timing_logger.info(
+                        "ctx_get_context_start",
+                        fn="context_search -> get_context",
+                        request_id=cid,
+                        top_k=payload.top_k,
+                        t_ns=t_ctx_start,
+                    )
+                context_text = await get_context(
+                    query=payload.query,
+                    top_k=payload.top_k if payload.top_k else 10,
+                    dataset_ids=payload.dataset_ids,
+                    user=user,
+                )
+                if timing_on:
+                    dur_ms = (time.perf_counter_ns() - t_ctx_start) / 1_000_000
+                    timing_logger.info(
+                        "ctx_get_context_end",
+                        fn="context_search -> get_context",
+                        request_id=cid,
+                        dur_ms=round(dur_ms, 3),
+                    )
+            
+            result_status = "ok"
+            return jsonable_encoder({
+                "status": "success",
+                "message": "Context retrieved successfully",
+                "data": context_text,
+                "correlation_id": cid
+            })
+        except Exception as error:
+            return JSONResponse(status_code=409, content={"status": "error", "message": str(error), "data": "", "correlation_id": cid})
+        finally:
+            if timing_on:
+                dur_ms = (time.perf_counter_ns() - t_req_start) / 1_000_000
+                timing_logger.info(
+                    "ctx_request_end",
+                    fn="context_search",
+                    request_id=cid,
+                    status=result_status,
+                    dur_ms=round(dur_ms, 3),
+                )
 
     return router
