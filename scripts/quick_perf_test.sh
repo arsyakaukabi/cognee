@@ -57,7 +57,7 @@ grep "⏱️ \[STEP" "$LOG_FILE" | tail -10
 
 echo ""
 echo "--- RESULT MAPPING ---"
-grep "⏱️ \[MAP_TRIPLETS\]" "$LOG_FILE" | tail -3
+grep -E "⏱️ \[MAP_TRIPLETS" "$LOG_FILE" | tail -3
 
 echo ""
 echo "--- DB VECTOR SEARCH (per collection) ---"

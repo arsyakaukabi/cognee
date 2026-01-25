@@ -378,11 +378,29 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
 
             # Find closest vectors to query_vector
             try:
-                # Force index usage by determining that sequential scan is expensive
-                # This is necessary because for smaller tables (<100k rows) Postgres often prefers Seq Scan
-                # even when HNSW is 10x faster.
+                # ============================================================
+                # PERFORMANCE OPTIMIZATION: PostgreSQL Session Settings
+                # ============================================================
+                # These settings are applied per-session to optimize vector search:
+                #
+                # 1. enable_seqscan = off
+                #    Forces use of HNSW index instead of sequential scan.
+                #    For small tables (<100k rows) Postgres prefers Seq Scan even when HNSW is 10x faster.
+                #
+                # 2. work_mem = 64MB
+                #    Default 4MB is too small for 3072-dimension vector operations.
+                #    Increasing to 64MB allows complex sorts/hash operations to fit in memory.
+                #
+                # 3. effective_io_concurrency = 200
+                #    Default 1 limits parallel disk I/O.
+                #    200 is recommended for SSDs (Cloud SQL uses SSD storage).
+                #
+                # These settings only affect this session before the query, not globally.
+                # ============================================================
                 from sqlalchemy import text
                 await session.execute(text("SET enable_seqscan = off"))
+                await session.execute(text("SET work_mem = '64MB'"))
+                await session.execute(text("SET effective_io_concurrency = 200"))
 
                 import time
                 start_db = time.time()

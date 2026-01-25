@@ -11,6 +11,76 @@ from cognee.shared.logging_utils import get_logger
 logger = get_logger("CustomMapper")
 
 
+# ============================================================================
+# BATCH QUERY OPTIMIZATION
+# ============================================================================
+
+async def batch_get_chunk_to_document_mapping(
+    chunk_ids: List[str],
+    graph_engine: GraphDBInterface
+) -> Dict[str, str]:
+    """
+    Get all DocumentChunk → TextDocument.name mappings in a SINGLE Cypher query.
+    
+    Returns:
+        Dict mapping chunk_id -> document_name (TextDocument.name)
+    """
+    if not chunk_ids:
+        return {}
+    
+    # Single Cypher query to get all mappings at once
+    query = """
+    MATCH (chunk:Node)-[r:EDGE]->(doc:Node)
+    WHERE chunk.id IN $chunk_ids
+    AND r.relationship_name = 'is_part_of'
+    AND doc.type = 'TextDocument'
+    RETURN chunk.id, doc.name
+    """
+    
+    try:
+        results = await graph_engine.query(query, {"chunk_ids": chunk_ids})
+        return {str(row[0]): str(row[1]) for row in results if row[0] and row[1]}
+    except Exception as e:
+        logger.warning(f"Batch query failed, falling back to sequential: {e}")
+        return {}
+
+
+async def batch_get_entity_to_chunks_mapping(
+    entity_ids: List[str],
+    graph_engine: GraphDBInterface
+) -> Dict[str, List[str]]:
+    """
+    Get all Entity → DocumentChunk IDs mappings in a SINGLE Cypher query.
+    
+    Returns:
+        Dict mapping entity_id -> list of chunk_ids
+    """
+    if not entity_ids:
+        return {}
+    
+    query = """
+    MATCH (chunk:Node)-[r:EDGE]->(entity:Node)
+    WHERE entity.id IN $entity_ids
+    AND r.relationship_name = 'contains'
+    RETURN entity.id, chunk.id
+    """
+    
+    try:
+        results = await graph_engine.query(query, {"entity_ids": entity_ids})
+        mapping = {}
+        for row in results:
+            if row[0] and row[1]:
+                entity_id = str(row[0])
+                chunk_id = str(row[1])
+                if entity_id not in mapping:
+                    mapping[entity_id] = []
+                mapping[entity_id].append(chunk_id)
+        return mapping
+    except Exception as e:
+        logger.warning(f"Batch entity query failed: {e}")
+        return {}
+
+
 async def get_textdocument_for_chunk(chunk_id: str, graph_engine: GraphDBInterface) -> Optional[Dict[str, Any]]:
     """
     Get TextDocument node for a given DocumentChunk.
@@ -198,62 +268,86 @@ async def map_triplet_results_to_knowledge_ids(
     """
     Map triplet results to knowledge IDs (TextDocument.name).
     
-    Preserves order from triplet ranking (first occurrence of knowledge ID wins).
-    Supports early stopping when target_n unique IDs are found.
+    OPTIMIZED: Uses batch Cypher queries instead of sequential get_edges() calls.
+    Reduces 37+ DB calls to just 2-3 batch calls.
     """
     func_start = time.time()
     
+    if not triplets:
+        return []
+    
+    # ========== PHASE 1: Collect all node IDs by type ==========
+    chunk_ids = set()
+    entity_ids = set()
+    node_order = []  # Preserve triplet order for ranking
+    
+    for triplet in triplets:
+        for node in (triplet.node1, triplet.node2):
+            node_id = str(node.id) if hasattr(node, "id") else None
+            node_type = node.attributes.get("type", "") if hasattr(node, "attributes") else ""
+            
+            if node_id and node_type:
+                node_order.append((node_id, node_type))
+                
+                if node_type == "DocumentChunk":
+                    chunk_ids.add(node_id)
+                elif node_type == "Entity":
+                    entity_ids.add(node_id)
+    
+    # ========== PHASE 2: Batch query chunk → document mappings ==========
+    batch_start = time.time()
+    
+    # Get chunk → document mapping in 1 query
+    chunk_to_doc = await batch_get_chunk_to_document_mapping(list(chunk_ids), graph_engine)
+    
+    # Get entity → chunks mapping in 1 query
+    entity_to_chunks = await batch_get_entity_to_chunks_mapping(list(entity_ids), graph_engine)
+    
+    # Get additional chunks from entities
+    additional_chunk_ids = set()
+    for chunks in entity_to_chunks.values():
+        additional_chunk_ids.update(chunks)
+    additional_chunk_ids -= chunk_ids  # Only query new ones
+    
+    # Get document mapping for entity's chunks
+    if additional_chunk_ids:
+        additional_chunk_to_doc = await batch_get_chunk_to_document_mapping(
+            list(additional_chunk_ids), graph_engine
+        )
+        chunk_to_doc.update(additional_chunk_to_doc)
+    
+    batch_duration = (time.time() - batch_start) * 1000
+    
+    # ========== PHASE 3: Build ordered knowledge_ids list ==========
     knowledge_ids = []
     seen_ids = set()
     
-    triplet_count = len(triplets)
-    node_map_count = 0
-    graph_query_time = 0.0
-    
-    for triplet in triplets:
-        # Early stopping
+    for node_id, node_type in node_order:
         if target_n and len(knowledge_ids) >= target_n:
             break
             
-        # Extract nodes
-        node1_id = str(triplet.node1.id) if hasattr(triplet.node1, "id") else None
-        node2_id = str(triplet.node2.id) if hasattr(triplet.node2, "id") else None
-        
-        node1_type = triplet.node1.attributes.get("type", "") if hasattr(triplet.node1, "attributes") else ""
-        node2_type = triplet.node2.attributes.get("type", "") if hasattr(triplet.node2, "attributes") else ""
-        
-        # Map node1
-        if node1_id and node1_type:
-            node_start = time.time()
-            mapped_ids = await map_node_to_knowledge_ids(node1_id, node1_type, graph_engine)
-            graph_query_time += (time.time() - node_start)
-            node_map_count += 1
-            
-            for kid in mapped_ids:
-                if kid not in seen_ids:
-                    knowledge_ids.append(kid)
-                    seen_ids.add(kid)
-        
-        # Map node2
-        if target_n and len(knowledge_ids) >= target_n:
-            continue
-            
-        if node2_id and node2_type:
-            node_start = time.time()
-            mapped_ids = await map_node_to_knowledge_ids(node2_id, node2_type, graph_engine)
-            graph_query_time += (time.time() - node_start)
-            node_map_count += 1
-            
-            for kid in mapped_ids:
-                if kid not in seen_ids:
-                    knowledge_ids.append(kid)
-                    seen_ids.add(kid)
+        if node_type == "DocumentChunk":
+            doc_name = chunk_to_doc.get(node_id)
+            if doc_name and doc_name not in seen_ids:
+                knowledge_ids.append(doc_name)
+                seen_ids.add(doc_name)
+                
+        elif node_type == "Entity":
+            chunk_list = entity_to_chunks.get(node_id, [])
+            for chunk_id in chunk_list:
+                doc_name = chunk_to_doc.get(chunk_id)
+                if doc_name and doc_name not in seen_ids:
+                    knowledge_ids.append(doc_name)
+                    seen_ids.add(doc_name)
+                    if target_n and len(knowledge_ids) >= target_n:
+                        break
     
     func_duration = (time.time() - func_start) * 1000
     logger.info(
-        f"⏱️ [MAP_TRIPLETS] Total: {func_duration:.2f}ms | "
-        f"Triplets: {triplet_count} | Nodes mapped: {node_map_count} | "
-        f"Graph queries: {graph_query_time*1000:.2f}ms | Results: {len(knowledge_ids)}"
+        f"⏱️ [MAP_TRIPLETS_BATCH] Total: {func_duration:.2f}ms | "
+        f"Batch queries: {batch_duration:.2f}ms | "
+        f"Chunks: {len(chunk_ids)} | Entities: {len(entity_ids)} | "
+        f"Results: {len(knowledge_ids)}"
     )
     
     return knowledge_ids

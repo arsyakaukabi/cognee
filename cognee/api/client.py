@@ -77,10 +77,93 @@ async def lifespan(app: FastAPI):
 
     await get_default_user()
 
+    # ================================================================
+    # PRE-WARM VECTOR INDEXES
+    # ================================================================
+    # Load HNSW indexes into PostgreSQL shared_buffers on startup
+    # to eliminate cold query latency for first user requests.
+    # ================================================================
+    prewarm_enabled = os.getenv("PREWARM_VECTOR_INDEXES", "true").lower() == "true"
+    if prewarm_enabled:
+        await prewarm_vector_indexes()
+
     # Emit a clear startup message for docker logs
     logger.info("Backend server has started")
 
     yield
+
+
+async def prewarm_vector_indexes():
+    """
+    Pre-warm PostgreSQL HNSW indexes by running diverse dummy queries.
+    
+    This forces PostgreSQL to load index pages into shared_buffers,
+    eliminating cold start latency for subsequent user queries.
+    """
+    import time
+    import numpy as np
+    
+    logger.info("🔥 [PREWARM] Starting vector index pre-warming...")
+    start_time = time.time()
+    
+    try:
+        from cognee.infrastructure.databases.vector import get_vector_engine
+        
+        vector_engine = get_vector_engine()
+        vector_size = vector_engine.embedding_engine.get_vector_size()
+        
+        # Get list of vector collections to prewarm
+        collections = [
+            "Entity_name",
+            "EdgeType_relationship_name", 
+            "DocumentChunk_text",
+            "TextDocument_name",
+            "TextSummary_text",
+            "EntityType_name",
+        ]
+        
+        # Generate diverse random vectors to traverse different regions of the index
+        # Using different random seeds ensures we hit various parts of the HNSW graph
+        num_warmup_queries = 5
+        
+        for collection in collections:
+            try:
+                # Check if collection exists
+                if not await vector_engine.has_collection(collection):
+                    logger.debug(f"[PREWARM] Collection {collection} does not exist, skipping")
+                    continue
+                
+                collection_start = time.time()
+                
+                for i in range(num_warmup_queries):
+                    # Generate random vector with different seeds
+                    np.random.seed(i * 42)
+                    random_vector = np.random.randn(vector_size).tolist()
+                    
+                    # Normalize to unit vector (required for cosine similarity)
+                    norm = np.linalg.norm(random_vector)
+                    if norm > 0:
+                        random_vector = [v / norm for v in random_vector]
+                    
+                    # Run search to load index pages into memory
+                    await vector_engine.search(
+                        collection_name=collection,
+                        query_vector=random_vector,
+                        limit=10
+                    )
+                
+                collection_duration = (time.time() - collection_start) * 1000
+                logger.info(f"🔥 [PREWARM] {collection}: {collection_duration:.0f}ms ({num_warmup_queries} queries)")
+                
+            except Exception as e:
+                logger.warning(f"[PREWARM] Failed to prewarm {collection}: {e}")
+                continue
+        
+        total_duration = (time.time() - start_time) * 1000
+        logger.info(f"🔥 [PREWARM] Completed in {total_duration:.0f}ms - indexes now cached in shared_buffers")
+        
+    except Exception as e:
+        logger.warning(f"[PREWARM] Pre-warming failed (non-critical): {e}")
 
 
 app = FastAPI(debug=app_environment != "prod", lifespan=lifespan)
