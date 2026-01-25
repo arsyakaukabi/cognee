@@ -1,8 +1,10 @@
-import base64
-import litellm
 import logging
-import instructor
+import base64
+import mimetypes
 from typing import Type
+
+import instructor
+import litellm
 from openai import OpenAI
 from pydantic import BaseModel
 
@@ -182,6 +184,9 @@ class OllamaAPIAdapter(LLMInterface):
             - str: The transcription of the image's content as a string.
         """
 
+        mime_guess, _ = mimetypes.guess_type(str(input_file))
+        mime_type = mime_guess or "image/png"
+
         async with open_data_file(input_file, mode="rb") as image_file:
             encoded_image = base64.b64encode(image_file.read()).decode("utf-8")
 
@@ -191,15 +196,23 @@ class OllamaAPIAdapter(LLMInterface):
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": "What's in this image?"},
+                        {
+                            "type": "text",
+                            "text": (
+                                "Transcribe this image as faithfully as possible. "
+                                "Preserve the original wording, language, and formatting cues; "
+                                "do not summarize or translate. Do not add any additional text "
+                                "beyond the transcription of the image."
+                            ),
+                        },
                         {
                             "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{encoded_image}"},
+                            "image_url": {"url": f"data:{mime_type};base64,{encoded_image}"},
                         },
                     ],
                 }
             ],
-            max_completion_tokens=300,
+            max_completion_tokens=self.max_completion_tokens,
         )
 
         # Ensure response is valid before accessing .choices[0].message.content
