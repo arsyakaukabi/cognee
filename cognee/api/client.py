@@ -39,6 +39,7 @@ from cognee.api.v1.users.routers import (
     get_users_router,
     get_visualize_router,
 )
+from cognee.api.v1.pipeline.routers import get_pipeline_router
 from cognee.modules.users.methods.get_authenticated_user import REQUIRE_AUTHENTICATION
 
 # Ensure application logging is configured for container stdout/stderr
@@ -295,6 +296,8 @@ app.include_router(get_update_router(), prefix="/api/v1/update", tags=["update"]
 app.include_router(get_responses_router(), prefix="/api/v1/responses", tags=["responses"])
 
 app.include_router(get_sync_router(), prefix="/api/v1/sync", tags=["sync"])
+
+app.include_router(get_pipeline_router(), prefix="/api/v1/pipeline", tags=["pipeline"])
 
 app.include_router(
     get_users_router(),
