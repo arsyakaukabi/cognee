@@ -41,8 +41,43 @@ def parse_document_name(doc_name: str) -> Tuple[str, str]:
     return doc_name, "unknown"
 
 
-async def _get_text_document_name_from_chunk(graph_engine, chunk_id: str) -> Optional[str]:
-    """Get the TextDocument name that a chunk belongs to via is_part_of relationship."""
+# Known prefixes that should use parse_document_name
+KNOWN_PREFIXES = ("produk_", "promo_", "program_", "wi_", "helpdesk_")
+
+
+def get_knowledge_id_and_type(doc_name: str, doc_id: Optional[str] = None) -> Tuple[str, str]:
+    """
+    Get id_knowledge and knowledge_type based on doc_name.
+    
+    If doc_name starts with known prefixes (produk_, promo_, program_, wi_, helpdesk_),
+    use parse_document_name to extract id and type.
+    
+    Otherwise, use the provided doc_id (if available) or fallback to doc_name,
+    and set knowledge_type to \"others\".
+    
+    Args:
+        doc_name: Document name
+        doc_id: Optional document ID from graph (avoids DB query)
+        
+    Returns:
+        Tuple of (id_knowledge, knowledge_type)
+    """
+    # Check if doc_name starts with known prefixes
+    if doc_name.startswith(KNOWN_PREFIXES):
+        return parse_document_name(doc_name)
+    
+    # For other documents, use provided doc_id or fallback to doc_name
+    id_knowledge = doc_id if doc_id else doc_name
+    return id_knowledge, "others"
+
+
+async def _get_text_document_info_from_chunk(graph_engine, chunk_id: str) -> Optional[Tuple[str, Optional[str]]]:
+    """
+    Get the TextDocument name and id that a chunk belongs to via is_part_of relationship.
+    
+    Returns:
+        Tuple of (name, id) or None if not found
+    """
     try:
         connections = await graph_engine.get_connections(str(chunk_id))
         for source, relationship, target in connections:
@@ -50,9 +85,9 @@ async def _get_text_document_name_from_chunk(graph_engine, chunk_id: str) -> Opt
             if relationship_name != "is_part_of":
                 continue
             if target.get("type") == "TextDocument":
-                return target.get("name")
+                return target.get("name"), str(target.get("id")) if target.get("id") else None
             if source.get("type") == "TextDocument":
-                return source.get("name")
+                return source.get("name"), str(source.get("id")) if source.get("id") else None
     except Exception:
         pass
     return None
@@ -152,8 +187,9 @@ async def retrieve_chunks(query: str, top_k: int = 10) -> List[RetrievalResult]:
         return []
     
     # Extract document names from chunks
-    doc_scores: Dict[str, float] = {}
-    cache: Dict[str, Optional[str]] = {}
+    # doc_scores: doc_name -> (score, doc_id)
+    doc_scores: Dict[str, Tuple[float, Optional[str]]] = {}
+    cache: Dict[str, Optional[Tuple[str, Optional[str]]]] = {}  # chunk_id -> (name, id)
     
     for i, chunk in enumerate(chunks):
         chunk_id = None
@@ -165,27 +201,30 @@ async def retrieve_chunks(query: str, top_k: int = 10) -> List[RetrievalResult]:
             chunk_id = str(chunk.get('id', chunk.get('chunk_id', '')))
             doc_name = chunk.get('document_name') or chunk.get('text_document_name')
             if doc_name:
-                if doc_name not in doc_scores or score < doc_scores[doc_name]:
-                    doc_scores[doc_name] = score
+                if doc_name not in doc_scores or score < doc_scores[doc_name][0]:
+                    # No doc_id available from dict, use None
+                    doc_scores[doc_name] = (score, None)
                 continue
         
         if not chunk_id:
             continue
         
         if chunk_id not in cache:
-            cache[chunk_id] = await _get_text_document_name_from_chunk(graph_engine, chunk_id)
+            cache[chunk_id] = await _get_text_document_info_from_chunk(graph_engine, chunk_id)
         
-        name = cache[chunk_id]
-        if name and (name not in doc_scores or score < doc_scores[name]):
-            doc_scores[name] = score
+        info = cache[chunk_id]
+        if info:
+            name, doc_id = info
+            if name and (name not in doc_scores or score < doc_scores[name][0]):
+                doc_scores[name] = (score, doc_id)
     
     # Sort by score and take top_k
-    ranked = sorted(doc_scores.items(), key=lambda x: x[1])[:top_k]
+    ranked = sorted(doc_scores.items(), key=lambda x: x[1][0])[:top_k]
     
     # Convert to RetrievalResult
     results = []
-    for doc_name, _ in ranked:
-        id_knowledge, knowledge_type = parse_document_name(doc_name)
+    for doc_name, (_, doc_id) in ranked:
+        id_knowledge, knowledge_type = get_knowledge_id_and_type(doc_name, doc_id)
         results.append(RetrievalResult(
             id_knowledge=id_knowledge,
             knowledge_type=knowledge_type
@@ -210,8 +249,9 @@ async def retrieve_graph_completion(query: str, top_k: int = 10) -> List[Retriev
         return []
     
     # Extract document names from triplets
-    doc_scores: Dict[str, float] = {}
-    cache: Dict[str, Optional[str]] = {}
+    # doc_scores: doc_name -> (score, doc_id)
+    doc_scores: Dict[str, Tuple[float, Optional[str]]] = {}
+    cache: Dict[str, Optional[Tuple[str, Optional[str]]]] = {}  # chunk_id -> (name, id)
     
     for triplet in triplets:
         score = _triplet_score(triplet)
@@ -220,22 +260,25 @@ async def retrieve_graph_completion(query: str, top_k: int = 10) -> List[Retriev
                 continue
             chunk_id = str(node.id)
             if chunk_id not in cache:
-                cache[chunk_id] = await _get_text_document_name_from_chunk(
+                cache[chunk_id] = await _get_text_document_info_from_chunk(
                     graph_engine, chunk_id
                 )
-            name = cache[chunk_id]
+            info = cache[chunk_id]
+            if not info:
+                continue
+            name, doc_id = info
             if not name:
                 continue
-            if name not in doc_scores or score < doc_scores[name]:
-                doc_scores[name] = score
+            if name not in doc_scores or score < doc_scores[name][0]:
+                doc_scores[name] = (score, doc_id)
     
     # Sort by score and take top_k
-    ranked = sorted(doc_scores.items(), key=lambda x: x[1])[:top_k]
+    ranked = sorted(doc_scores.items(), key=lambda x: x[1][0])[:top_k]
     
     # Convert to RetrievalResult
     results = []
-    for doc_name, _ in ranked:
-        id_knowledge, knowledge_type = parse_document_name(doc_name)
+    for doc_name, (_, doc_id) in ranked:
+        id_knowledge, knowledge_type = get_knowledge_id_and_type(doc_name, doc_id)
         results.append(RetrievalResult(
             id_knowledge=id_knowledge,
             knowledge_type=knowledge_type
@@ -265,13 +308,48 @@ async def retrieve(query: str, top_k: int = 10, search_type: str = "chunks") -> 
         if not doc_names:
             return []
         
+        # Separate docs by prefix type
+        docs_with_known_prefix = []
+        docs_needing_id_lookup = []
+        
+        for doc_name in doc_names:
+            if doc_name.startswith(KNOWN_PREFIXES):
+                docs_with_known_prefix.append(doc_name)
+            else:
+                docs_needing_id_lookup.append(doc_name)
+        
+        # Batch fetch doc_ids from Data table for non-prefix docs
+        doc_id_map = {}  # doc_name -> doc_id
+        if docs_needing_id_lookup:
+            try:
+                from cognee.infrastructure.databases.relational import get_relational_engine
+                from cognee.modules.data.models import Data
+                from sqlalchemy import select
+                
+                db_engine = get_relational_engine()
+                async with db_engine.get_async_session() as session:
+                    stmt = select(Data.name, Data.id).where(Data.name.in_(docs_needing_id_lookup))
+                    result = await session.execute(stmt)
+                    for row in result:
+                        if row[0] and row[1]:
+                            doc_id_map[row[0]] = str(row[1])
+            except Exception:
+                pass
+        
         # Parse all docs and identify which ones need summaries
         parsed_docs = {}  # doc_name -> (id, type)
         docs_needing_summary = []
         excluded_types = {"produk", "promo", "program", "wi", "helpdesk"}
         
         for doc_name in doc_names:
-            id_knowledge, knowledge_type = parse_document_name(doc_name)
+            if doc_name.startswith(KNOWN_PREFIXES):
+                id_knowledge, knowledge_type = parse_document_name(doc_name)
+            else:
+                # Use doc_id from batch lookup, fallback to doc_name
+                doc_id = doc_id_map.get(doc_name)
+                id_knowledge = doc_id if doc_id else doc_name
+                knowledge_type = "others"
+            
             parsed_docs[doc_name] = (id_knowledge, knowledge_type)
             
             # Case-insensitive check for exclusion
@@ -309,92 +387,53 @@ async def get_document_details(doc_name: str) -> Dict[str, Union[str, List[str],
     Returns:
         Dict with "filename", "file_size", "created_at", "updated_at", and "summaries" keys.
     """
-    import os
-    
     graph_engine = await get_graph_engine()
-    
-    # 1. Fetch document properties
-    # Use Node with type filter (same pattern as _get_summaries_batch)
-    query_doc = """
-    MATCH (doc:Node)
-    WHERE doc.name = $doc_name
-      AND doc.type IN ['TextDocument', 'PdfDocument', 'AudioDocument', 'ImageDocument', 'UnstructuredDocument']
-    RETURN doc.properties
-    """
     
     filename = None
     file_size = None
     created_at = None
     updated_at = None
+    original_extension = None
     
+    # 1. Fetch metadata from relational database (Data table) - includes original_extension
     try:
-        print(f"DEBUG: Querying doc {doc_name}")
-        results_doc = await graph_engine.query(query_doc, {"doc_name": doc_name})
-        print(f"DEBUG: Doc results: {results_doc}")
-        if results_doc:
-            for row in results_doc:
-                if not row or not row[0]:
-                    continue
-                props_str = row[0]
-                try:
-                    props = json.loads(props_str) if isinstance(props_str, str) else props_str
-                    if isinstance(props, dict):
-                        # Get filename - use doc_name with extension or extract basename
-                        raw_location = props.get("raw_data_location", "")
-                        mime_type = props.get("mime_type", "")
-                        
-                        # Determine extension from mime_type or raw_location
-                        ext = ""
-                        if raw_location:
-                            ext = os.path.splitext(raw_location)[1]  # e.g. ".txt"
-                        if not ext and mime_type:
-                            # Common mime type to extension mapping
-                            mime_ext_map = {
-                                "text/plain": ".txt",
-                                "application/pdf": ".pdf",
-                                "text/html": ".html",
-                                "application/json": ".json",
-                            }
-                            ext = mime_ext_map.get(mime_type, "")
-                        
-                        # Construct filename as doc_name + extension
-                        filename = f"{doc_name}{ext}" if ext else doc_name
-                        
-                        # Get metadata fields
-                        file_size = props.get("data_size")
-                        created_at = props.get("created_at")
-                        updated_at = props.get("updated_at")
-                        break
-                except (json.JSONDecodeError, TypeError):
-                    continue
+        from cognee.infrastructure.databases.relational import get_relational_engine
+        from cognee.modules.data.models import Data
+        from sqlalchemy import select
+        
+        db_engine = get_relational_engine()
+        async with db_engine.get_async_session() as session:
+            # Query Data table by name - get original_extension for filename
+            stmt = select(
+                Data.data_size, 
+                Data.created_at, 
+                Data.updated_at,
+                Data.original_extension,
+                Data.extension
+            ).where(Data.name == doc_name)
+            result = await session.execute(stmt)
+            row = result.first()
+            if row:
+                file_size = row[0]
+                if row[1]:
+                    created_at = int(row[1].timestamp() * 1000) if hasattr(row[1], 'timestamp') else row[1]
+                if row[2]:
+                    updated_at = int(row[2].timestamp() * 1000) if hasattr(row[2], 'timestamp') else row[2]
+                # Prefer original_extension, fallback to extension
+                original_extension = row[3] or row[4]
     except Exception as e:
-        print(f"DEBUG: Error querying doc: {e}")
+        print(f"DEBUG: Error querying relational DB: {e}")
         pass
     
-    # 1b. Fetch file_size from relational database (Data table)
-    if file_size is None:
-        try:
-            from cognee.infrastructure.databases.relational import get_relational_engine
-            from cognee.modules.data.models import Data
-            from sqlalchemy import select
-            
-            db_engine = get_relational_engine()
-            async with db_engine.get_async_session() as session:
-                # Query Data table by name
-                stmt = select(Data.data_size, Data.created_at, Data.updated_at).where(Data.name == doc_name)
-                result = await session.execute(stmt)
-                row = result.first()
-                if row:
-                    file_size = row[0]
-                    # Use DB timestamps if not already set from graph
-                    if created_at is None and row[1]:
-                        created_at = int(row[1].timestamp() * 1000) if hasattr(row[1], 'timestamp') else row[1]
-                    if updated_at is None and row[2]:
-                        updated_at = int(row[2].timestamp() * 1000) if hasattr(row[2], 'timestamp') else row[2]
-        except Exception as e:
-            print(f"DEBUG: Error querying relational DB for file_size: {e}")
-            pass
+    # 2. Build filename from doc_name + original_extension
+    if original_extension:
+        # Ensure extension starts with dot
+        ext = original_extension if original_extension.startswith('.') else f".{original_extension}"
+        filename = f"{doc_name}{ext}"
+    else:
+        filename = doc_name
         
+
     # 2. Fetch chunk summaries
     # Path: TextDocument <- DocumentChunk -> TextSummary
     query_summaries = """

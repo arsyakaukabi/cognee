@@ -2952,13 +2952,13 @@ components:
       title: DatasetDTO
     DocsPayloadDTO:
       properties:
-        name:
+        id_knowledge:
           type: string
-          title: Name
-          description: Name of the document to retrieve details for
+          title: Id Knowledge
+          description: ID of the knowledge/document to retrieve details for (UUID)
       type: object
       required:
-      - name
+      - id_knowledge
       title: DocsPayloadDTO
       description: Payload for document details endpoint.
     DocsResponseDTO:

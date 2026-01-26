@@ -14,7 +14,7 @@ def get_docs_router():
 
 class DocsPayloadDTO(InDTO):
     """Payload for document details endpoint."""
-    name: str = Field(description="Name of the document to retrieve details for")
+    id_knowledge: str = Field(description="ID of the knowledge/document to retrieve details for (UUID)")
 
 
 class DocsResponseDTO(OutDTO):
@@ -31,7 +31,33 @@ async def get_document_details_endpoint(payload: DocsPayloadDTO):
     """
     Retrieve document details (filename, metadata, and summaries).
     """
-    details = await get_document_details(payload.name)
+    from cognee.infrastructure.databases.relational import get_relational_engine
+    from cognee.modules.data.models import Data
+    from sqlalchemy import select
+    from uuid import UUID
+    
+    # Look up doc_name by id_knowledge
+    doc_name = None
+    try:
+        # Try to parse as UUID
+        doc_id = UUID(payload.id_knowledge)
+        
+        db_engine = get_relational_engine()
+        async with db_engine.get_async_session() as session:
+            stmt = select(Data.name).where(Data.id == doc_id)
+            result = await session.execute(stmt)
+            row = result.first()
+            if row and row[0]:
+                doc_name = row[0]
+    except (ValueError, Exception):
+        # If not a valid UUID or DB error, fallback to using id_knowledge as name
+        doc_name = payload.id_knowledge
+    
+    if not doc_name:
+        # Fallback to using id_knowledge directly as doc_name
+        doc_name = payload.id_knowledge
+    
+    details = await get_document_details(doc_name)
     return DocsResponseDTO(
         filename=details.get("filename"),
         file_size=details.get("file_size"),
