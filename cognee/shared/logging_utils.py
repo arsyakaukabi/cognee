@@ -221,6 +221,9 @@ def get_logger(name=None, level=None) -> LoggerInterface:
         logger = logging.getLogger(name if name else __name__)
         if level is not None:
             logger.setLevel(level)
+        else:
+            level = log_levels.get(os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO)
+            logger.setLevel(level)
         return logger
 
 

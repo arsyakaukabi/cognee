@@ -1,3 +1,4 @@
+import os
 from .supported_databases import supported_databases
 from .embeddings import get_embedding_engine
 from cognee.infrastructure.databases.graph.config import get_graph_context_config
@@ -71,16 +72,25 @@ def create_vector_engine(
         )
 
         try:
-            from .pgvector.PGVectorAdapter import PGVectorAdapter
+            from .pgvector.PGVectorAdapter import PGVectorAdapter, CustomizedPGVectorAdapter
         except ImportError:
             raise ImportError(
                 "PostgreSQL dependencies are not installed. Please install with 'pip install cognee\"[postgres]\"' or 'pip install cognee\"[postgres-binary]\"' to use PGVector functionality."
             )
+        
+        which_pgvector_adapter = os.getenv("WHICH_PGVECTOR_ADAPTER", "original")
 
-        return PGVectorAdapter(
-            connection_string,
-            vector_db_key,
-            embedding_engine,
+        if which_pgvector_adapter == "customized":
+            return CustomizedPGVectorAdapter(
+                connection_string,
+                vector_db_key,
+                embedding_engine,
+            )
+        else:
+            return PGVectorAdapter(
+                connection_string,
+                vector_db_key,
+                embedding_engine,
         )
 
     elif vector_db_provider.lower() == "chromadb":
