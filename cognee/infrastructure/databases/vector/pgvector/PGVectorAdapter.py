@@ -888,6 +888,7 @@ class CachedPGVectorAdapter(PGVectorAdapter):
         self._init_lock = asyncio.Lock()
         self._existing_collections: Optional[set[str]] = None
         self._existing_collections_lock = asyncio.Lock()
+        self._table_cache: dict[str, Table] = {}
         
         logger.info("Cached PGVectorAdapter initialized.")
 
@@ -935,11 +936,29 @@ class CachedPGVectorAdapter(PGVectorAdapter):
 
     async def get_table(self, collection_name: str) -> Table:
         await self.initialize_once()
-        return await super().get_table(collection_name)
+        if collection_name in self._table_cache:
+            return self._table_cache[collection_name]
+
+        existing = await self._get_existing_collections()
+        if collection_name not in existing:
+            raise CollectionNotFoundError(f"Collection '{collection_name}' not found!")
+
+        async with self.engine.begin() as connection:
+            def _reflect_table(conn):
+                metadata = MetaData()
+                metadata.reflect(bind=conn, only=[collection_name])
+                return metadata.tables[collection_name]
+
+            table = await connection.run_sync(_reflect_table)
+
+        self._table_cache[collection_name] = table
+        return table
 
     async def create_collection(self, collection_name: str, payload_schema=None):
         await self.initialize_once()
         result = await super().create_collection(collection_name, payload_schema)
         if self._existing_collections is not None:
             self._existing_collections.add(collection_name)
+            # Clear any stale cache entry for this collection so it can be reflected once and reused.
+            self._table_cache.pop(collection_name, None)
         return result

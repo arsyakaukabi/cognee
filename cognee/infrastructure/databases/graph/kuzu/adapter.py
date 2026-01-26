@@ -5,6 +5,8 @@ import json
 import asyncio
 import tempfile
 from uuid import UUID, uuid5, NAMESPACE_OID
+from time import perf_counter
+from contextlib import contextmanager
 from kuzu import Connection
 from kuzu.database import Database
 from datetime import datetime, timezone
@@ -31,6 +33,17 @@ logger = get_logger()
 cache_config = get_cache_config()
 if cache_config.shared_kuzu_lock:
     from cognee.infrastructure.databases.cache.get_cache_engine import get_cache_engine
+
+
+@contextmanager
+def _log_timing(operation: str, **fields):
+    start = perf_counter()
+    try:
+        yield
+    finally:
+        duration_ms = (perf_counter() - start) * 1000
+        field_str = " ".join(f"{k}={v}" for k, v in fields.items() if v is not None)
+        logger.debug(f"[timing] {operation} {field_str} took {duration_ms:.2f} ms")
 
 
 class KuzuAdapter(GraphDBInterface):
@@ -83,100 +96,93 @@ class KuzuAdapter(GraphDBInterface):
             except Exception as e:
                 logger.info(f"JSON extension already installed or not needed: {e}")
 
-        _install_json_extension()
-
-        try:
-            if "s3://" in self.db_path:
-                with tempfile.NamedTemporaryFile(mode="w", delete=False) as temp_file:
-                    self.temp_graph_file = temp_file.name
-
-                run_sync(self.pull_from_s3())
-
-                self.db = Database(
-                    self.temp_graph_file,
-                    buffer_pool_size=2048 * 1024 * 1024,  # 2048MB buffer pool
-                    max_db_size=4096 * 1024 * 1024,
-                )
-            else:
-                # Ensure the parent directory exists before creating the database
-                db_dir = os.path.dirname(self.db_path)
-
-                # If db_path is just a filename, db_dir will be empty string
-                # In this case, use the directory containing the db_path or current directory
-                if not db_dir:
-                    # If no directory in path, use the absolute path's directory
-                    abs_path = os.path.abspath(self.db_path)
-                    db_dir = os.path.dirname(abs_path)
-
-                file_storage = get_file_storage(db_dir)
-
-                run_sync(file_storage.ensure_directory_exists())
-
-                try:
-                    self.db = Database(
-                        self.db_path,
-                        buffer_pool_size=2048 * 1024 * 1024,  # 2048MB buffer pool
-                        max_db_size=4096 * 1024 * 1024,
-                    )
-                except RuntimeError:
-                    from .kuzu_migrate import read_kuzu_storage_version
-                    import kuzu
-
-                    kuzu_db_version = read_kuzu_storage_version(self.db_path)
-                    if (
-                        kuzu_db_version == "0.9.0" or kuzu_db_version == "0.8.2"
-                    ) and kuzu_db_version != kuzu.__version__:
-                        # Try to migrate kuzu database to latest version
-                        from .kuzu_migrate import kuzu_migration
-
-                        kuzu_migration(
-                            new_db=self.db_path + "_new",
-                            old_db=self.db_path,
-                            new_version=kuzu.__version__,
-                            old_version=kuzu_db_version,
-                            overwrite=True,
-                        )
-
-                    self.db = Database(
-                        self.db_path,
-                        buffer_pool_size=2048 * 1024 * 1024,  # 2048MB buffer pool
-                        max_db_size=4096 * 1024 * 1024,
-                    )
-
-            self.db.init_database()
-            self.connection = Connection(self.db)
+        with _log_timing("kuzu_initialize"):
+            _install_json_extension()
 
             try:
-                self.connection.execute("LOAD EXTENSION JSON;")
-                logger.info("Loaded JSON extension")
-            except Exception as e:
-                logger.info(f"JSON extension already loaded or unavailable: {e}")
+                if "s3://" in self.db_path:
+                    with tempfile.NamedTemporaryFile(mode="w", delete=False) as temp_file:
+                        self.temp_graph_file = temp_file.name
 
-            # Create node table with essential fields and timestamp
-            self.connection.execute("""
-                CREATE NODE TABLE IF NOT EXISTS Node(
-                    id STRING PRIMARY KEY,
-                    name STRING,
-                    type STRING,
-                    created_at TIMESTAMP,
-                    updated_at TIMESTAMP,
-                    properties STRING
-                )
-            """)
-            # Create relationship table with timestamp
-            self.connection.execute("""
-                CREATE REL TABLE IF NOT EXISTS EDGE(
-                    FROM Node TO Node,
-                    relationship_name STRING,
-                    created_at TIMESTAMP,
-                    updated_at TIMESTAMP,
-                    properties STRING
-                )
-            """)
-            logger.debug("Kuzu database initialized successfully")
-        except Exception as e:
-            logger.error(f"Failed to initialize Kuzu database: {e}")
-            raise e
+                    run_sync(self.pull_from_s3())
+
+                    self.db = Database(
+                        self.temp_graph_file,
+                        buffer_pool_size=2048 * 1024 * 1024,  # 2048MB buffer pool
+                        max_db_size=4096 * 1024 * 1024,
+                    )
+                else:
+                    db_dir = os.path.dirname(self.db_path)
+                    if not db_dir:
+                        abs_path = os.path.abspath(self.db_path)
+                        db_dir = os.path.dirname(abs_path)
+
+                    file_storage = get_file_storage(db_dir)
+
+                    run_sync(file_storage.ensure_directory_exists())
+
+                    try:
+                        self.db = Database(
+                            self.db_path,
+                            buffer_pool_size=2048 * 1024 * 1024,
+                            max_db_size=4096 * 1024 * 1024,
+                        )
+                    except RuntimeError:
+                        from .kuzu_migrate import read_kuzu_storage_version
+                        import kuzu
+
+                        kuzu_db_version = read_kuzu_storage_version(self.db_path)
+                        if (
+                            kuzu_db_version == "0.9.0" or kuzu_db_version == "0.8.2"
+                        ) and kuzu_db_version != kuzu.__version__:
+                            from .kuzu_migrate import kuzu_migration
+
+                            kuzu_migration(
+                                new_db=self.db_path + "_new",
+                                old_db=self.db_path,
+                                new_version=kuzu.__version__,
+                                old_version=kuzu_db_version,
+                                overwrite=True,
+                            )
+
+                        self.db = Database(
+                            self.db_path,
+                            buffer_pool_size=2048 * 1024 * 1024,
+                            max_db_size=4096 * 1024 * 1024,
+                        )
+
+                self.db.init_database()
+                self.connection = Connection(self.db)
+
+                try:
+                    self.connection.execute("LOAD EXTENSION JSON;")
+                    logger.info("Loaded JSON extension")
+                except Exception as e:
+                    logger.info(f"JSON extension already loaded or unavailable: {e}")
+
+                self.connection.execute("""
+                    CREATE NODE TABLE IF NOT EXISTS Node(
+                        id STRING PRIMARY KEY,
+                        name STRING,
+                        type STRING,
+                        created_at TIMESTAMP,
+                        updated_at TIMESTAMP,
+                        properties STRING
+                    )
+                """)
+                self.connection.execute("""
+                    CREATE REL TABLE IF NOT EXISTS EDGE(
+                        FROM Node TO Node,
+                        relationship_name STRING,
+                        created_at TIMESTAMP,
+                        updated_at TIMESTAMP,
+                        properties STRING
+                    )
+                """)
+                logger.debug("Kuzu database initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize Kuzu database: {e}")
+                raise e
 
     async def push_to_s3(self) -> None:
         if os.getenv("STORAGE_BACKEND", "").lower() == "s3" and hasattr(self, "temp_graph_file"):
@@ -228,6 +234,8 @@ class KuzuAdapter(GraphDBInterface):
 
             - List[Tuple]: A list of tuples representing the query results.
         """
+        with _log_timing("kuzu_query_dispatch"):
+            pass
         loop = asyncio.get_running_loop()
         params = params or {}
 
@@ -269,13 +277,15 @@ class KuzuAdapter(GraphDBInterface):
                 self.open_connections += 1
                 logger.info(f"Open connections after open: {self.open_connections}")
                 try:
-                    result = blocking_query()
+                    with _log_timing("kuzu_query_exec"):
+                        result = blocking_query()
                 finally:
                     self.open_connections -= 1
                     logger.info(f"Open connections after close: {self.open_connections}")
                 return result
         else:
-            result = await loop.run_in_executor(self.executor, blocking_query)
+            with _log_timing("kuzu_query_exec"):
+                result = await loop.run_in_executor(self.executor, blocking_query)
             return result
 
     def close(self):
@@ -382,8 +392,9 @@ class KuzuAdapter(GraphDBInterface):
             - bool: True if the node exists, False otherwise.
         """
         query_str = "MATCH (n:Node) WHERE n.id = $id RETURN COUNT(n) > 0"
-        result = await self.query(query_str, {"id": node_id})
-        return result[0][0] if result else False
+        with _log_timing("kuzu_has_node"):
+            result = await self.query(query_str, {"id": node_id})
+            return result[0][0] if result else False
 
     async def add_node(self, node: DataPoint) -> None:
         """

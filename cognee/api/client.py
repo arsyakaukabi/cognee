@@ -80,27 +80,46 @@ async def lifespan(app: FastAPI):
 
     await get_default_user()
 
-    # Warm up embedding client to reduce cold-start latency on the first real request.
-    # This is best-effort: failures should not prevent the API from starting.
-    warmup = os.getenv("WARMUP_EMBEDDINGS_ON_STARTUP", "true").lower() == "true"
-    if warmup:
+    # Search warmup (best-effort, controlled by env)
+    warmup_enabled = os.getenv("WARMUP_SEARCH_ON_STARTUP", "true").lower() == "true"
+    warmup_runs = int(os.getenv("WARMUP_SEARCH_RUNS", "2"))
+    if warmup_enabled and warmup_runs > 0:
         try:
-            from cognee.infrastructure.databases.vector import get_vector_engine
+            from cognee.api.v1.search import search as cognee_search
+            from cognee.api.v1.search.retrieval import retrieve
+            from cognee.api.v1.search.context import get_context
+            from cognee.modules.users.methods import get_default_user
+            from cognee.modules.data.methods import get_authorized_existing_datasets
 
+            user = await get_default_user()
+            query_text = "warmup"
+            top_k = 10
+            query_type = "graph_completion_custom"
             t0 = time.perf_counter()
-            vector_engine = get_vector_engine()
-            which_pgvector_adapter = os.getenv("WHICH_PGVECTOR_ADAPTER", "original")
-            
-            if which_pgvector_adapter == "cached":
-                await vector_engine.initialize_once()
-            
-            await vector_engine.embedding_engine.embed_text(["warmup"])
+            for _ in range(warmup_runs):
+                try:
+                    await retrieve(
+                        query="warmup",
+                        top_k=top_k,
+                        search_type=query_type
+                    )
+                    await get_context(
+                        query=query_text,
+                        top_k=top_k,
+                        dataset_ids=None,
+                        user=user,
+                    )
+                    
+                except Exception:
+                    # Ignore warmup failures (e.g., missing collections)
+                    pass
             logger.info(
-                "Embedding warmup completed",
+                "Search warmup completed",
+                runs=warmup_runs,
                 dur_ms=round((time.perf_counter() - t0) * 1000, 3),
             )
         except Exception:
-            logger.exception("Embedding warmup failed")
+            logger.exception("Search warmup failed")
 
     # Emit a clear startup message for docker logs
     logger.info("Backend server has started")

@@ -5,7 +5,8 @@ import tempfile
 from uuid import UUID
 from typing import Optional
 from typing import AsyncGenerator, List
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
+from time import perf_counter
 from sqlalchemy.orm import joinedload
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy import NullPool, text, select, MetaData, Table, delete, inspect
@@ -23,6 +24,17 @@ from ..ModelBase import Base
 logger = get_logger()
 
 
+@contextmanager
+def _log_timing(operation: str, **fields):
+    start = perf_counter()
+    try:
+        yield
+    finally:
+        duration_ms = (perf_counter() - start) * 1000
+        field_str = " ".join(f"{k}={v}" for k, v in fields.items() if v is not None)
+        logger.debug(f"[timing] {operation} {field_str} took {duration_ms:.2f} ms")
+
+
 class SQLAlchemyAdapter:
     """
     Adapt a SQLAlchemy connection for asynchronous operations with database management
@@ -33,39 +45,40 @@ class SQLAlchemyAdapter:
         self.db_path: str = None
         self.db_uri: str = connection_string
 
-        if "sqlite" in connection_string:
-            [prefix, db_path] = connection_string.split("///")
-            self.db_path = db_path
+        with _log_timing("relational_init"):
+            if "sqlite" in connection_string:
+                [prefix, db_path] = connection_string.split("///")
+                self.db_path = db_path
 
-            if "s3://" in self.db_path:
-                db_dir_path = path.dirname(self.db_path)
-                file_storage = get_file_storage(db_dir_path)
+                if "s3://" in self.db_path:
+                    db_dir_path = path.dirname(self.db_path)
+                    file_storage = get_file_storage(db_dir_path)
 
-                run_sync(file_storage.ensure_directory_exists())
+                    run_sync(file_storage.ensure_directory_exists())
 
-                with tempfile.NamedTemporaryFile(mode="w", delete=False) as temp_file:
-                    self.temp_db_file = temp_file.name
-                    connection_string = prefix + "///" + self.temp_db_file
+                    with tempfile.NamedTemporaryFile(mode="w", delete=False) as temp_file:
+                        self.temp_db_file = temp_file.name
+                        connection_string = prefix + "///" + self.temp_db_file
 
-                run_sync(self.pull_from_s3())
+                    run_sync(self.pull_from_s3())
 
-        if "sqlite" in connection_string:
-            self.engine = create_async_engine(
-                connection_string,
-                poolclass=NullPool,
-                connect_args={"timeout": 30},
-            )
-        else:
-            self.engine = create_async_engine(
-                connection_string,
-                pool_size=20,
-                max_overflow=20,
-                pool_recycle=280,
-                pool_pre_ping=True,
-                pool_timeout=280,
-            )
+            if "sqlite" in connection_string:
+                self.engine = create_async_engine(
+                    connection_string,
+                    poolclass=NullPool,
+                    connect_args={"timeout": 30},
+                )
+            else:
+                self.engine = create_async_engine(
+                    connection_string,
+                    pool_size=20,
+                    max_overflow=20,
+                    pool_recycle=280,
+                    pool_pre_ping=True,
+                    pool_timeout=280,
+                )
 
-        self.sessionmaker = async_sessionmaker(bind=self.engine, expire_on_commit=False)
+            self.sessionmaker = async_sessionmaker(bind=self.engine, expire_on_commit=False)
 
     async def push_to_s3(self) -> None:
         if os.getenv("STORAGE_BACKEND", "").lower() == "s3" and hasattr(self, "temp_db_file"):
@@ -135,14 +148,15 @@ class SQLAlchemyAdapter:
               and their types.
         """
         fields_query_parts = [f"{item['name']} {item['type']}" for item in table_config]
-        async with self.engine.begin() as connection:
-            await connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_name};"))
-            await connection.execute(
-                text(
-                    f'CREATE TABLE IF NOT EXISTS {schema_name}."{table_name}" ({", ".join(fields_query_parts)});'
+        with _log_timing("create_table", schema=schema_name, table=table_name):
+            async with self.engine.begin() as connection:
+                await connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_name};"))
+                await connection.execute(
+                    text(
+                        f'CREATE TABLE IF NOT EXISTS {schema_name}."{table_name}" ({", ".join(fields_query_parts)});'
+                    )
                 )
-            )
-            await connection.close()
+                await connection.close()
 
     async def delete_table(self, table_name: str, schema_name: Optional[str] = "public"):
         """
@@ -155,15 +169,14 @@ class SQLAlchemyAdapter:
             - schema_name (Optional[str]): The name of the schema containing the table to
               delete, defaults to 'public'. (default 'public')
         """
-        async with self.engine.begin() as connection:
-            if self.engine.dialect.name == "sqlite":
-                # SQLite doesn't support schema namespaces and the CASCADE keyword.
-                # However, foreign key constraint can be defined with ON DELETE CASCADE during table creation.
-                await connection.execute(text(f'DROP TABLE IF EXISTS "{table_name}";'))
-            else:
-                await connection.execute(
-                    text(f'DROP TABLE IF EXISTS {schema_name}."{table_name}" CASCADE;')
-                )
+        with _log_timing("delete_table", schema=schema_name, table=table_name):
+            async with self.engine.begin() as connection:
+                if self.engine.dialect.name == "sqlite":
+                    await connection.execute(text(f'DROP TABLE IF EXISTS "{table_name}";'))
+                else:
+                    await connection.execute(
+                        text(f'DROP TABLE IF EXISTS {schema_name}."{table_name}" CASCADE;')
+                    )
 
     async def insert_data(
         self,
@@ -193,21 +206,16 @@ class SQLAlchemyAdapter:
             return 0
 
         try:
-            # Use SQLAlchemy Core insert with execution options
-            async with self.engine.begin() as conn:
-                # Dialect-agnostic table reference
-                if self.engine.dialect.name == "sqlite":
-                    # Foreign key constraints are disabled by default in SQLite (for backwards compatibility),
-                    # so must be enabled for each database connection/session separately.
-                    await conn.execute(text("PRAGMA foreign_keys=ON"))
-                    table = await self.get_table(table_name)  # SQLite ignores schemas
-                else:
-                    table = await self.get_table(table_name, schema_name)
+            with _log_timing("insert_data", table=table_name, rows=len(data)):
+                async with self.engine.begin() as conn:
+                    if self.engine.dialect.name == "sqlite":
+                        await conn.execute(text("PRAGMA foreign_keys=ON"))
+                        table = await self.get_table(table_name)
+                    else:
+                        table = await self.get_table(table_name, schema_name)
 
-                result = await conn.execute(table.insert().values(data))
-
-                # Return rowcount for validation
-                return result.rowcount
+                    result = await conn.execute(table.insert().values(data))
+                    return result.rowcount
 
         except Exception as e:
             logger.error(f"Insert failed: {str(e)}")
@@ -222,18 +230,19 @@ class SQLAlchemyAdapter:
 
             - List[str]: A list of schema names in the database.
         """
-        if self.engine.dialect.name == "postgresql":
-            async with self.engine.begin() as connection:
-                result = await connection.execute(
-                    text(
-                        """
-                        SELECT schema_name FROM information_schema.schemata
-                        WHERE schema_name NOT IN ('pg_catalog', 'pg_toast', 'information_schema');
-                        """
+        with _log_timing("get_schema_list"):
+            if self.engine.dialect.name == "postgresql":
+                async with self.engine.begin() as connection:
+                    result = await connection.execute(
+                        text(
+                            """
+                            SELECT schema_name FROM information_schema.schemata
+                            WHERE schema_name NOT IN ('pg_catalog', 'pg_toast', 'information_schema');
+                            """
+                        )
                     )
-                )
-                return [schema[0] for schema in result.fetchall()]
-        return []
+                    return [schema[0] for schema in result.fetchall()]
+            return []
 
     async def delete_entity_by_id(
         self, table_name: str, data_id: UUID, schema_name: Optional[str] = "public"
@@ -249,21 +258,18 @@ class SQLAlchemyAdapter:
             - schema_name (Optional[str]): The name of the schema where the table resides,
               defaults to 'public'. (default 'public')
         """
-        if self.engine.dialect.name == "sqlite":
-            async with self.get_async_session() as session:
-                TableModel = await self.get_table(table_name, schema_name)
-
-                # Foreign key constraints are disabled by default in SQLite (for backwards compatibility),
-                # so must be enabled for each database connection/session separately.
-                await session.execute(text("PRAGMA foreign_keys = ON;"))
-
-                await session.execute(TableModel.delete().where(TableModel.c.id == data_id))
-                await session.commit()
-        else:
-            async with self.get_async_session() as session:
-                TableModel = await self.get_table(table_name, schema_name)
-                await session.execute(TableModel.delete().where(TableModel.c.id == data_id))
-                await session.commit()
+        with _log_timing("delete_entity_by_id", table=table_name):
+            if self.engine.dialect.name == "sqlite":
+                async with self.get_async_session() as session:
+                    TableModel = await self.get_table(table_name, schema_name)
+                    await session.execute(text("PRAGMA foreign_keys = ON;"))
+                    await session.execute(TableModel.delete().where(TableModel.c.id == data_id))
+                    await session.commit()
+            else:
+                async with self.get_async_session() as session:
+                    TableModel = await self.get_table(table_name, schema_name)
+                    await session.execute(TableModel.delete().where(TableModel.c.id == data_id))
+                    await session.commit()
 
     async def delete_data_entity(self, data_id: UUID):
         """
@@ -274,47 +280,42 @@ class SQLAlchemyAdapter:
 
             - data_id (UUID): The unique identifier of the data entity to be deleted.
         """
-        async with self.get_async_session() as session:
-            if self.engine.dialect.name == "sqlite":
-                # Foreign key constraints are disabled by default in SQLite (for backwards compatibility),
-                # so must be enabled for each database connection/session separately.
-                await session.execute(text("PRAGMA foreign_keys = ON;"))
+        with _log_timing("delete_data_entity"):
+            async with self.get_async_session() as session:
+                if self.engine.dialect.name == "sqlite":
+                    await session.execute(text("PRAGMA foreign_keys = ON;"))
 
-            try:
-                data_entity = (await session.scalars(select(Data).where(Data.id == data_id))).one()
-            except (ValueError, NoResultFound) as e:
-                raise EntityNotFoundError(message=f"Entity not found: {str(e)}") from e
+                try:
+                    data_entity = (await session.scalars(select(Data).where(Data.id == data_id))).one()
+                except (ValueError, NoResultFound) as e:
+                    raise EntityNotFoundError(message=f"Entity not found: {str(e)}") from e
 
-            # Check if other data objects point to the same raw data location
-            raw_data_location_entities = (
-                await session.execute(
-                    select(Data.raw_data_location).where(
-                        Data.raw_data_location == data_entity.raw_data_location
+                raw_data_location_entities = (
+                    await session.execute(
+                        select(Data.raw_data_location).where(
+                            Data.raw_data_location == data_entity.raw_data_location
+                        )
                     )
-                )
-            ).all()
+                ).all()
 
-            # Don't delete local file unless this is the only reference to the file in the database
-            if len(raw_data_location_entities) == 1:
-                # delete local file only if it's created by cognee
-                storage_config = get_storage_config()
+                if len(raw_data_location_entities) == 1:
+                    storage_config = get_storage_config()
 
-                if (
-                    storage_config["data_root_directory"]
-                    in raw_data_location_entities[0].raw_data_location
-                ):
-                    file_storage = get_file_storage(storage_config["data_root_directory"])
+                    if (
+                        storage_config["data_root_directory"]
+                        in raw_data_location_entities[0].raw_data_location
+                    ):
+                        file_storage = get_file_storage(storage_config["data_root_directory"])
 
-                    file_path = os.path.basename(raw_data_location_entities[0].raw_data_location)
+                        file_path = os.path.basename(raw_data_location_entities[0].raw_data_location)
 
-                    if await file_storage.file_exists(file_path):
-                        await file_storage.remove(file_path)
-                    else:
-                        # Report bug as file should exist
-                        logger.error("Local file which should exist can't be found.")
+                        if await file_storage.file_exists(file_path):
+                            await file_storage.remove(file_path)
+                        else:
+                            logger.error("Local file which should exist can't be found.")
 
-            await session.execute(delete(Data).where(Data.id == data_id))
-            await session.commit()
+                await session.execute(delete(Data).where(Data.id == data_id))
+                await session.commit()
 
     async def get_table(self, table_name: str, schema_name: Optional[str] = "public") -> Table:
         """
@@ -332,25 +333,21 @@ class SQLAlchemyAdapter:
 
             - Table: The SQLAlchemy Table object corresponding to the specified table.
         """
-        async with self.engine.begin() as connection:
-            if self.engine.dialect.name == "sqlite":
-                # Load the schema information into the MetaData object
-                await connection.run_sync(Base.metadata.reflect)
-                if table_name in Base.metadata.tables:
-                    return Base.metadata.tables[table_name]
+        with _log_timing("get_table", table=table_name, schema=schema_name):
+            async with self.engine.begin() as connection:
+                if self.engine.dialect.name == "sqlite":
+                    await connection.run_sync(Base.metadata.reflect)
+                    if table_name in Base.metadata.tables:
+                        return Base.metadata.tables[table_name]
+                    else:
+                        raise EntityNotFoundError(message=f"Table '{table_name}' not found.")
                 else:
-                    raise EntityNotFoundError(message=f"Table '{table_name}' not found.")
-            else:
-                # Create a MetaData instance to load table information
-                metadata = MetaData()
-                # Load table information from schema into MetaData
-                await connection.run_sync(metadata.reflect, schema=schema_name)
-                # Define the full table name
-                full_table_name = f"{schema_name}.{table_name}"
-                # Check if table is in list of tables for the given schema
-                if full_table_name in metadata.tables:
-                    return metadata.tables[full_table_name]
-                raise EntityNotFoundError(message=f"Table '{full_table_name}' not found.")
+                    metadata = MetaData()
+                    await connection.run_sync(metadata.reflect, schema=schema_name)
+                    full_table_name = f"{schema_name}.{table_name}"
+                    if full_table_name in metadata.tables:
+                        return metadata.tables[full_table_name]
+                    raise EntityNotFoundError(message=f"Table '{full_table_name}' not found.")
 
     async def get_table_names(self) -> List[str]:
         """
@@ -362,19 +359,19 @@ class SQLAlchemyAdapter:
             - List[str]: A list of all table names in the database.
         """
         table_names = []
-        async with self.engine.begin() as connection:
-            if self.engine.dialect.name == "sqlite":
-                # Use a new MetaData instance to reflect all tables
-                metadata = MetaData()
-                await connection.run_sync(metadata.reflect)  # Reflect the entire database
-                table_names = list(metadata.tables.keys())  # Get table names
-            else:
-                schema_list = await self.get_schema_list()
-                metadata = MetaData()
-                for schema_name in schema_list:
-                    await connection.run_sync(metadata.reflect, schema=schema_name)
-                    table_names.extend(metadata.tables.keys())  # Append table names from schema
-                    metadata.clear()  # Clear metadata for the next schema
+        with _log_timing("get_table_names"):
+            async with self.engine.begin() as connection:
+                if self.engine.dialect.name == "sqlite":
+                    metadata = MetaData()
+                    await connection.run_sync(metadata.reflect)
+                    table_names = list(metadata.tables.keys())
+                else:
+                    schema_list = await self.get_schema_list()
+                    metadata = MetaData()
+                    for schema_name in schema_list:
+                        await connection.run_sync(metadata.reflect, schema=schema_name)
+                        table_names.extend(metadata.tables.keys())
+                        metadata.clear()
 
         return table_names
 
@@ -394,25 +391,26 @@ class SQLAlchemyAdapter:
 
             A dictionary of data results keyed by their unique identifiers.
         """
-        async with self.engine.begin() as connection:
-            query = f'SELECT * FROM "{table_name}"'
-            if filters:
-                filter_conditions = " AND ".join(
-                    [
-                        f"{key} IN ({', '.join([f':{key}{i}' for i in range(len(value))])})"
-                        if isinstance(value, list)
-                        else f"{key} = :{key}"
-                        for key, value in filters.items()
-                    ]
-                )
-                query += f" WHERE {filter_conditions};"
-                query = text(query)
-                results = await connection.execute(query, filters)
-            else:
-                query += ";"
-                query = text(query)
-                results = await connection.execute(query)
-            return {result["data_id"]: result["status"] for result in results}
+        with _log_timing("get_data", table=table_name):
+            async with self.engine.begin() as connection:
+                query = f'SELECT * FROM "{table_name}"'
+                if filters:
+                    filter_conditions = " AND ".join(
+                        [
+                            f"{key} IN ({', '.join([f':{key}{i}' for i in range(len(value))])})"
+                            if isinstance(value, list)
+                            else f"{key} = :{key}"
+                            for key, value in filters.items()
+                        ]
+                    )
+                    query += f" WHERE {filter_conditions};"
+                    query = text(query)
+                    results = await connection.execute(query, filters)
+                else:
+                    query += ";"
+                    query = text(query)
+                    results = await connection.execute(query)
+                return {result["data_id"]: result["status"] for result in results}
 
     async def get_all_data_from_table(self, table_name: str, schema: str = "public"):
         """
@@ -429,25 +427,22 @@ class SQLAlchemyAdapter:
 
             A list of dictionaries representing all rows in the specified table.
         """
-        async with self.get_async_session() as session:
-            # Validate inputs to prevent SQL injection
-            if not table_name.isidentifier():
-                raise ValueError("Invalid table name")
-            if schema and not schema.isidentifier():
-                raise ValueError("Invalid schema name")
+        with _log_timing("get_all_data_from_table", table=table_name, schema=schema):
+            async with self.get_async_session() as session:
+                if not table_name.isidentifier():
+                    raise ValueError("Invalid table name")
+                if schema and not schema.isidentifier():
+                    raise ValueError("Invalid schema name")
 
-            if self.engine.dialect.name == "sqlite":
-                table = await self.get_table(table_name)
-            else:
-                table = await self.get_table(table_name, schema)
+                if self.engine.dialect.name == "sqlite":
+                    table = await self.get_table(table_name)
+                else:
+                    table = await self.get_table(table_name, schema)
 
-            # Query all data from the table
-            query = select(table)
-            result = await session.execute(query)
-
-            # Fetch all rows as a list of dictionaries
-            rows = result.mappings().all()
-            return rows
+                query = select(table)
+                result = await session.execute(query)
+                rows = result.mappings().all()
+                return rows
 
     async def execute_query(self, query):
         """
@@ -463,61 +458,61 @@ class SQLAlchemyAdapter:
 
             The result set as a list of dictionaries, with each dictionary representing a row.
         """
-        async with self.engine.begin() as connection:
-            result = await connection.execute(text(query))
-            return [dict(row) for row in result]
+        with _log_timing("execute_query"):
+            async with self.engine.begin() as connection:
+                result = await connection.execute(text(query))
+                return [dict(row) for row in result]
 
     async def drop_tables(self):
         """
         Drop specified tables from the database, if they exist, and handle errors that may occur
         during the process.
         """
-        async with self.engine.begin() as connection:
-            try:
-                await connection.execute(text("DROP TABLE IF EXISTS group_permission CASCADE"))
-                await connection.execute(text("DROP TABLE IF EXISTS permissions CASCADE"))
-                # Add more DROP TABLE statements for other tables as needed
-                logger.debug("Database tables dropped successfully.")
-            except Exception as e:
-                logger.error(f"Error dropping database tables: {e}")
-                raise e
+        with _log_timing("drop_tables"):
+            async with self.engine.begin() as connection:
+                try:
+                    await connection.execute(text("DROP TABLE IF EXISTS group_permission CASCADE"))
+                    await connection.execute(text("DROP TABLE IF EXISTS permissions CASCADE"))
+                    logger.debug("Database tables dropped successfully.")
+                except Exception as e:
+                    logger.error(f"Error dropping database tables: {e}")
+                    raise e
 
     async def create_database(self):
         """
         Create the database if it does not exist, ensuring necessary directories are in place
         for SQLite.
         """
-        if self.engine.dialect.name == "sqlite":
-            db_directory = path.dirname(self.db_path)
-            db_name = path.basename(self.db_path)
-            file_storage = get_file_storage(db_directory)
+        with _log_timing("create_database"):
+            if self.engine.dialect.name == "sqlite":
+                db_directory = path.dirname(self.db_path)
+                db_name = path.basename(self.db_path)
+                file_storage = get_file_storage(db_directory)
 
-            if not await file_storage.file_exists(db_name):
-                await file_storage.ensure_directory_exists()
+                if not await file_storage.file_exists(db_name):
+                    await file_storage.ensure_directory_exists()
 
-        async with self.engine.begin() as connection:
-            if len(Base.metadata.tables.keys()) > 0:
-                await connection.run_sync(Base.metadata.create_all)
+            async with self.engine.begin() as connection:
+                if len(Base.metadata.tables.keys()) > 0:
+                    await connection.run_sync(Base.metadata.create_all)
 
     async def delete_database(self):
         """
         Delete the entire database, including all tables and files if applicable.
         """
         try:
-            if self.engine.dialect.name == "sqlite":
-                await self.engine.dispose(close=True)
-                # Wait for the database connections to close and release the file (Windows)
-                await asyncio.sleep(2)
-                db_directory = path.dirname(self.db_path)
-                file_name = path.basename(self.db_path)
-                file_storage = get_file_storage(db_directory)
-                await file_storage.remove(file_name)
-            else:
-                async with self.engine.begin() as connection:
-                    # Create a MetaData instance to load table information
-                    metadata = MetaData()
-                    # Drop all tables from the public schema
-                    schema_list = ["public", "public_staging"]
+            with _log_timing("delete_database"):
+                if self.engine.dialect.name == "sqlite":
+                    await self.engine.dispose(close=True)
+                    await asyncio.sleep(2)
+                    db_directory = path.dirname(self.db_path)
+                    file_name = path.basename(self.db_path)
+                    file_storage = get_file_storage(db_directory)
+                    await file_storage.remove(file_name)
+                else:
+                    async with self.engine.begin() as connection:
+                        metadata = MetaData()
+                        schema_list = ["public", "public_staging"]
                     for schema_name in schema_list:
                         # Load the schema information into the MetaData object
                         await connection.run_sync(metadata.reflect, schema=schema_name)
@@ -543,8 +538,9 @@ class SQLAlchemyAdapter:
 
             A dictionary containing the schema details of the database.
         """
-        async with self.engine.begin() as connection:
-            tables = await self.get_table_names()
+        with _log_timing("extract_schema"):
+            async with self.engine.begin() as connection:
+                tables = await self.get_table_names()
 
             schema = {}
 

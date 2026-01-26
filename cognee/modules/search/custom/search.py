@@ -2,6 +2,7 @@
 Simple search script to get top 10 knowledge IDs from a query.
 """
 
+import os
 from typing import List, Literal, Optional
 
 from cognee.infrastructure.databases.graph import get_graph_engine
@@ -59,7 +60,8 @@ async def search_knowledge_ids(
             )
         
         # Expand if needed to reach target_n
-        if len(set(knowledge_ids)) < target_n:
+        expand_enabled = os.getenv("CUSTOM_SEARCH_EXPANSION_ENABLED", "true").lower() == "true"
+        if expand_enabled and len(set(knowledge_ids)) < target_n:
             logger.info(f"   Initial search: {len(set(knowledge_ids))} unique IDs (target: {target_n})")
             logger.info(f"   Expanding search...")
             async with TraceSpan("search.expand_to_n_unique", "search"):
@@ -100,7 +102,8 @@ async def search_knowledge_ids(
         )
         
         # Expand if needed to reach target_n
-        if len(set(knowledge_ids)) < target_n:
+        expand_enabled = os.getenv("CUSTOM_SEARCH_EXPANSION_ENABLED", "true").lower() == "true"
+        if expand_enabled and len(set(knowledge_ids)) < target_n:
             logger.info(f"   Initial search: {len(set(knowledge_ids))} unique IDs (target: {target_n})")
             logger.info(f"   Expanding search...")
             knowledge_ids = await expand_to_n_unique_knowledge_ids(
