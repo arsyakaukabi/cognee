@@ -265,15 +265,30 @@ async def retrieve(query: str, top_k: int = 10, search_type: str = "chunks") -> 
         if not doc_names:
             return []
         
-        # Batch fetch summaries for all documents in single query (optimized)
-        graph_engine = await get_graph_engine()
-        summaries = await _get_summaries_batch(graph_engine, doc_names)
+        # Parse all docs and identify which ones need summaries
+        parsed_docs = {}  # doc_name -> (id, type)
+        docs_needing_summary = []
+        excluded_types = {"produk", "promo", "program", "wi", "helpdesk"}
+        
+        for doc_name in doc_names:
+            id_knowledge, knowledge_type = parse_document_name(doc_name)
+            parsed_docs[doc_name] = (id_knowledge, knowledge_type)
+            
+            # Case-insensitive check for exclusion
+            if knowledge_type.lower() not in excluded_types:
+                docs_needing_summary.append(doc_name)
+        
+        # Batch fetch summaries only for allowed types
+        summaries = {}
+        if docs_needing_summary:
+            graph_engine = await get_graph_engine()
+            summaries = await _get_summaries_batch(graph_engine, docs_needing_summary)
         
         # Build results with summaries
         results = []
         for doc_name in doc_names:
-            id_knowledge, knowledge_type = parse_document_name(doc_name)
-            summary = summaries.get(doc_name)  # None if not found
+            id_knowledge, knowledge_type = parsed_docs[doc_name]
+            summary = summaries.get(doc_name)  # None if not found or excluded
             results.append(RetrievalResult(
                 id_knowledge=id_knowledge,
                 knowledge_type=knowledge_type,
