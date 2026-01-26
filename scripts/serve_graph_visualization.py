@@ -40,7 +40,8 @@ def main():
 
     html_path = Path(args.path).resolve()
     if not html_path.exists():
-        raise FileNotFoundError(f"Visualization file not found: {html_path}")
+        html_path.parent.mkdir(parents=True, exist_ok=True)
+        html_path.write_text("<!DOCTYPE html><html><body><h3>Visualization not generated yet.</h3></body></html>")
 
     # Serve the directory containing the HTML file
     os.chdir(html_path.parent)
