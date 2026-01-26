@@ -72,7 +72,11 @@ def create_vector_engine(
         )
 
         try:
-            from .pgvector.PGVectorAdapter import PGVectorAdapter, CustomizedPGVectorAdapter
+            from .pgvector.PGVectorAdapter import (
+                PGVectorAdapter,
+                CachedPGVectorAdapter,
+                CustomizedPGVectorAdapter
+            )
         except ImportError:
             raise ImportError(
                 "PostgreSQL dependencies are not installed. Please install with 'pip install cognee\"[postgres]\"' or 'pip install cognee\"[postgres-binary]\"' to use PGVector functionality."
@@ -82,6 +86,12 @@ def create_vector_engine(
 
         if which_pgvector_adapter == "customized":
             return CustomizedPGVectorAdapter(
+                connection_string,
+                vector_db_key,
+                embedding_engine,
+            )
+        elif which_pgvector_adapter == "cached":
+            return CachedPGVectorAdapter(
                 connection_string,
                 vector_db_key,
                 embedding_engine,

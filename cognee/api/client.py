@@ -89,6 +89,11 @@ async def lifespan(app: FastAPI):
 
             t0 = time.perf_counter()
             vector_engine = get_vector_engine()
+            which_pgvector_adapter = os.getenv("WHICH_PGVECTOR_ADAPTER", "original")
+            
+            if which_pgvector_adapter == "cached":
+                await vector_engine.initialize_once()
+            
             await vector_engine.embedding_engine.embed_text(["warmup"])
             logger.info(
                 "Embedding warmup completed",

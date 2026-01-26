@@ -867,3 +867,79 @@ class CustomizedPGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
     async def prune(self):
         # Clean up the database if it was set up as temporary
         await self.delete_database()
+
+
+class CachedPGVectorAdapter(PGVectorAdapter):
+    """
+    Variant of CustomizedPGVectorAdapter that pre-initializes expensive metadata once
+    (collection list, caches) and reuses it for subsequent operations.
+
+    Call `await initialize_once()` on service startup to populate caches before traffic.
+    """
+
+    def __init__(
+        self,
+        connection_string: str,
+        api_key: Optional[str],
+        embedding_engine: EmbeddingEngine,
+    ):
+        super().__init__(connection_string, api_key, embedding_engine)
+        self._initialized = False
+        self._init_lock = asyncio.Lock()
+        self._existing_collections: Optional[set[str]] = None
+        self._existing_collections_lock = asyncio.Lock()
+        
+        logger.info("Cached PGVectorAdapter initialized.")
+
+    async def _get_existing_collections(self) -> set[str]:
+        if self._existing_collections is not None:
+            return self._existing_collections
+
+        async with self._existing_collections_lock:
+            if self._existing_collections is not None:
+                return self._existing_collections
+
+            if self.engine.dialect.name == "postgresql":
+                async with self.engine.begin() as connection:
+                    rows = await connection.execute(
+                        text("SELECT tablename FROM pg_tables WHERE schemaname = current_schema()")
+                    )
+                    self._existing_collections = {r[0] for r in rows.fetchall()}
+            else:
+                async with self.engine.begin() as connection:
+                    metadata = MetaData()
+                    await connection.run_sync(metadata.reflect)
+                    self._existing_collections = set(metadata.tables.keys())
+
+        return self._existing_collections
+
+    async def initialize_once(self):
+        if self._initialized:
+            return
+        async with self._init_lock:
+            if self._initialized:
+                return
+            with _log_timing("cached_adapter_init"):
+                # Prefetch collections to avoid per-request reflection
+                await self._get_existing_collections()
+                logger.info(
+                    "CachedPGVectorAdapter initialized with %d collections",
+                    len(self._existing_collections or []),
+                )
+            self._initialized = True
+
+    async def has_collection(self, collection_name: str) -> bool:
+        await self.initialize_once()
+        existing = await self._get_existing_collections()
+        return collection_name in existing
+
+    async def get_table(self, collection_name: str) -> Table:
+        await self.initialize_once()
+        return await super().get_table(collection_name)
+
+    async def create_collection(self, collection_name: str, payload_schema=None):
+        await self.initialize_once()
+        result = await super().create_collection(collection_name, payload_schema)
+        if self._existing_collections is not None:
+            self._existing_collections.add(collection_name)
+        return result
