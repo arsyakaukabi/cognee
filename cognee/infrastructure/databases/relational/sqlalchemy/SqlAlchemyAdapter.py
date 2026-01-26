@@ -7,6 +7,7 @@ from typing import Optional
 from typing import AsyncGenerator, List
 from contextlib import asynccontextmanager, contextmanager
 from time import perf_counter
+from sqlalchemy.exc import ResourceClosedError
 from sqlalchemy.orm import joinedload
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy import NullPool, text, select, MetaData, Table, delete, inspect
@@ -510,18 +511,27 @@ class SQLAlchemyAdapter:
                     file_storage = get_file_storage(db_directory)
                     await file_storage.remove(file_name)
                 else:
-                    async with self.engine.begin() as connection:
-                        metadata = MetaData()
-                        schema_list = ["public", "public_staging"]
+                    schema_list = ["public", "public_staging"]
                     for schema_name in schema_list:
-                        # Load the schema information into the MetaData object
-                        await connection.run_sync(metadata.reflect, schema=schema_name)
-                        for table in metadata.sorted_tables:
-                            drop_table_query = text(
-                                f'DROP TABLE IF EXISTS {schema_name}."{table.name}" CASCADE'
-                            )
-                            await connection.execute(drop_table_query)
-                        metadata.clear()
+                        metadata = MetaData()
+                        try:
+                            async with self.engine.begin() as connection:
+                                await connection.run_sync(metadata.reflect, schema=schema_name)
+                                for table in metadata.sorted_tables:
+                                    drop_table_query = text(
+                                        f'DROP TABLE IF EXISTS {schema_name}."{table.name}" CASCADE'
+                                    )
+                                    await connection.execute(drop_table_query)
+                        except ResourceClosedError:
+                            async with self.engine.begin() as connection:
+                                await connection.run_sync(metadata.reflect, schema=schema_name)
+                                for table in metadata.sorted_tables:
+                                    drop_table_query = text(
+                                        f'DROP TABLE IF EXISTS {schema_name}."{table.name}" CASCADE'
+                                    )
+                                    await connection.execute(drop_table_query)
+                        finally:
+                            metadata.clear()
         except Exception as e:
             logger.error(f"Error deleting database: {e}")
             raise e
