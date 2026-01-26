@@ -399,6 +399,35 @@ paths:
       security:
       - OAuth2PasswordBearer: []
       - APIKeyCookie: []
+  /api/v1/docs/:
+    post:
+      tags:
+      - docs
+      summary: Retrieve Document Details
+      description: Retrieve document details (filename, metadata, and summaries).
+      operationId: get_document_details_endpoint_api_v1_docs__post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DocsPayloadDTO'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocsResponseDTO'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - OAuth2PasswordBearer: []
+      - APIKeyCookie: []
   /api/v1/memify:
     post:
       tags:
@@ -2921,6 +2950,57 @@ components:
       - createdAt
       - ownerId
       title: DatasetDTO
+    DocsPayloadDTO:
+      properties:
+        name:
+          type: string
+          title: Name
+          description: Name of the document to retrieve details for
+      type: object
+      required:
+      - name
+      title: DocsPayloadDTO
+      description: Payload for document details endpoint.
+    DocsResponseDTO:
+      properties:
+        filename:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Filename
+          description: Filename (doc_name + extension)
+          default: null
+        file_size:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: File Size
+          description: File size in bytes
+          default: null
+        created_at:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Created At
+          description: Document creation timestamp (epoch ms)
+          default: null
+        updated_at:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Updated At
+          description: Document update timestamp (epoch ms)
+          default: null
+        summaries:
+          items:
+            type: string
+          type: array
+          title: Summaries
+          description: List of chunk summaries
+          default: []
+      type: object
+      title: DocsResponseDTO
+      description: Document details response.
     ErrorModel:
       properties:
         detail:
