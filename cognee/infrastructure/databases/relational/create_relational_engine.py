@@ -1,3 +1,5 @@
+from urllib.parse import quote_plus
+
 from .sqlalchemy.SqlAlchemyAdapter import SQLAlchemyAdapter
 from functools import lru_cache
 
@@ -43,8 +45,12 @@ def create_relational_engine(
             # Test if asyncpg is available
             import asyncpg
 
+            # URL-encode username and password to handle special characters like @ in passwords
+            encoded_username = quote_plus(db_username) if db_username else ""
+            encoded_password = quote_plus(db_password) if db_password else ""
+
             connection_string = (
-                f"postgresql+asyncpg://{db_username}:{db_password}@{db_host}:{db_port}/{db_name}"
+                f"postgresql+asyncpg://{encoded_username}:{encoded_password}@{db_host}:{db_port}/{db_name}"
             )
         except ImportError:
             raise ImportError(
