@@ -3,6 +3,7 @@ from cognee.modules.visualization.cognee_network_visualization import (
 )
 from cognee.infrastructure.databases.graph import get_graph_engine
 from cognee.shared.logging_utils import get_logger, setup_logging, ERROR
+from pathlib import Path
 
 
 import asyncio
@@ -12,16 +13,23 @@ logger = get_logger()
 
 
 async def visualize_graph(destination_file_path: str = None):
+    was_provided = destination_file_path is not None
+    if not was_provided:
+        repo_root = Path(__file__).resolve().parents[3]
+        destination_dir = repo_root / ".data_storage" / "visualizations"
+        destination_file_path = str(destination_dir / "graph_visualization.html")
+
     graph_engine = await get_graph_engine()
     graph_data = await graph_engine.get_graph_data()
 
     graph = await cognee_network_visualization(graph_data, destination_file_path)
 
-    if destination_file_path:
+    if was_provided:
         logger.info(f"The HTML file has been stored at path: {destination_file_path}")
     else:
         logger.info(
-            "The HTML file has been stored on your home directory! Navigate there with cd ~"
+            "The HTML file has been stored inside the repository at "
+            f"{destination_file_path}"
         )
 
     return graph
