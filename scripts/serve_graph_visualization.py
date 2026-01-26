@@ -7,6 +7,7 @@ from cognee.api.v1.visualize.start_visualization_server import visualization_ser
 
 def main():
     default_port = int(os.getenv("VISUALIZATION_PORT", "9000"))
+    default_host = os.getenv("VISUALIZATION_HOST", "localhost")
 
     parser = argparse.ArgumentParser(
         description="Serve the generated graph visualization HTML on a chosen port."
@@ -16,6 +17,12 @@ def main():
         type=int,
         default=default_port,
         help=f"Port to serve on (default: env VISUALIZATION_PORT or {default_port})",
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default=default_host,
+        help=f"Host to bind (default: env VISUALIZATION_HOST or {default_host})",
     )
     parser.add_argument(
         "--path",
@@ -37,9 +44,9 @@ def main():
 
     # Serve the directory containing the HTML file
     os.chdir(html_path.parent)
-    shutdown = visualization_server(port=args.port)
+    shutdown = visualization_server(port=args.port, host=args.host)
     print(
-        f"Serving {html_path.name} at http://localhost:{args.port}/{html_path.name}\n"
+        f"Serving {html_path.name} at http://{args.host}:{args.port}/{html_path.name}\n"
         "Press Ctrl+C to stop."
     )
     try:

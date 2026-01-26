@@ -65,7 +65,8 @@ def get_visualize_router() -> APIRouter:
             await visualize_graph()
 
             port = os.getenv("VISUALIZATION_PORT", "9000")
-            redirect_url = f"http://localhost:{port}/graph_visualization.html"
+            host = os.getenv("VISUALIZATION_HOST", "localhost")
+            redirect_url = f"http://{host}:{port}/graph_visualization.html"
             return RedirectResponse(url=redirect_url, status_code=307)
 
         except Exception as error:
