@@ -210,3 +210,5 @@ docs/
 testing/
 data/
 *.dump
+
+graph-migration/output
