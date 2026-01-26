@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from uuid import UUID
+import os
 from cognee.shared.logging_utils import get_logger
 from cognee.modules.users.methods import get_authenticated_user
 from cognee.modules.data.methods import get_authorized_existing_datasets
@@ -60,8 +61,12 @@ def get_visualize_router() -> APIRouter:
             # Will only be used if ENABLE_BACKEND_ACCESS_CONTROL is set to True
             await set_database_global_context_variables(dataset[0].id, dataset[0].owner_id)
 
-            html_visualization = await visualize_graph()
-            return HTMLResponse(html_visualization)
+            # Generate the visualization file (so the served file is fresh)
+            await visualize_graph()
+
+            port = os.getenv("VISUALIZATION_PORT", "9000")
+            redirect_url = f"http://localhost:{port}/graph_visualization.html"
+            return RedirectResponse(url=redirect_url, status_code=307)
 
         except Exception as error:
             return JSONResponse(status_code=409, content={"error": str(error)})
