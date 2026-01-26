@@ -24,6 +24,7 @@ from cognee.api.v1.settings.routers import get_settings_router
 from cognee.api.v1.datasets.routers import get_datasets_router
 from cognee.api.v1.cognify.routers import get_cognify_router
 from cognee.api.v1.search.routers import get_search_router
+from cognee.api.v1.search.routers.get_docs_router import get_docs_router
 from cognee.api.v1.ontologies.routers.get_ontology_router import get_ontology_router
 from cognee.api.v1.memify.routers import get_memify_router
 from cognee.api.v1.add.routers import get_add_router
@@ -273,6 +274,8 @@ app.include_router(get_cognify_router(), prefix="/api/v1/cognify", tags=["cognif
 app.include_router(get_memify_router(), prefix="/api/v1/memify", tags=["memify"])
 
 app.include_router(get_search_router(), prefix="/api/v1/search", tags=["search"])
+
+app.include_router(get_docs_router(), prefix="/api/v1/docs", tags=["docs"])
 
 app.include_router(
     get_permissions_router(),

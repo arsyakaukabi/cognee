@@ -4,7 +4,7 @@ Returns document IDs and their knowledge types from CHUNKS or GRAPH_COMPLETION s
 """
 
 import json
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 from pydantic import BaseModel
 
 import cognee
@@ -297,4 +297,144 @@ async def retrieve(query: str, top_k: int = 10, search_type: str = "chunks") -> 
         return results
     else:
         return await retrieve_chunks(query, top_k)
+
+
+async def get_document_details(doc_name: str) -> Dict[str, Union[str, List[str], int, None]]:
+    """
+    Retrieve document filename and chunk summaries.
+    
+    Args:
+        doc_name: Name of the document (e.g. "helpdesk_...")
+        
+    Returns:
+        Dict with "filename", "file_size", "created_at", "updated_at", and "summaries" keys.
+    """
+    import os
+    
+    graph_engine = await get_graph_engine()
+    
+    # 1. Fetch document properties
+    # Use Node with type filter (same pattern as _get_summaries_batch)
+    query_doc = """
+    MATCH (doc:Node)
+    WHERE doc.name = $doc_name
+      AND doc.type IN ['TextDocument', 'PdfDocument', 'AudioDocument', 'ImageDocument', 'UnstructuredDocument']
+    RETURN doc.properties
+    """
+    
+    filename = None
+    file_size = None
+    created_at = None
+    updated_at = None
+    
+    try:
+        print(f"DEBUG: Querying doc {doc_name}")
+        results_doc = await graph_engine.query(query_doc, {"doc_name": doc_name})
+        print(f"DEBUG: Doc results: {results_doc}")
+        if results_doc:
+            for row in results_doc:
+                if not row or not row[0]:
+                    continue
+                props_str = row[0]
+                try:
+                    props = json.loads(props_str) if isinstance(props_str, str) else props_str
+                    if isinstance(props, dict):
+                        # Get filename - use doc_name with extension or extract basename
+                        raw_location = props.get("raw_data_location", "")
+                        mime_type = props.get("mime_type", "")
+                        
+                        # Determine extension from mime_type or raw_location
+                        ext = ""
+                        if raw_location:
+                            ext = os.path.splitext(raw_location)[1]  # e.g. ".txt"
+                        if not ext and mime_type:
+                            # Common mime type to extension mapping
+                            mime_ext_map = {
+                                "text/plain": ".txt",
+                                "application/pdf": ".pdf",
+                                "text/html": ".html",
+                                "application/json": ".json",
+                            }
+                            ext = mime_ext_map.get(mime_type, "")
+                        
+                        # Construct filename as doc_name + extension
+                        filename = f"{doc_name}{ext}" if ext else doc_name
+                        
+                        # Get metadata fields
+                        file_size = props.get("data_size")
+                        created_at = props.get("created_at")
+                        updated_at = props.get("updated_at")
+                        break
+                except (json.JSONDecodeError, TypeError):
+                    continue
+    except Exception as e:
+        print(f"DEBUG: Error querying doc: {e}")
+        pass
+    
+    # 1b. Fetch file_size from relational database (Data table)
+    if file_size is None:
+        try:
+            from cognee.infrastructure.databases.relational import get_relational_engine
+            from cognee.modules.data.models import Data
+            from sqlalchemy import select
+            
+            db_engine = get_relational_engine()
+            async with db_engine.get_async_session() as session:
+                # Query Data table by name
+                stmt = select(Data.data_size, Data.created_at, Data.updated_at).where(Data.name == doc_name)
+                result = await session.execute(stmt)
+                row = result.first()
+                if row:
+                    file_size = row[0]
+                    # Use DB timestamps if not already set from graph
+                    if created_at is None and row[1]:
+                        created_at = int(row[1].timestamp() * 1000) if hasattr(row[1], 'timestamp') else row[1]
+                    if updated_at is None and row[2]:
+                        updated_at = int(row[2].timestamp() * 1000) if hasattr(row[2], 'timestamp') else row[2]
+        except Exception as e:
+            print(f"DEBUG: Error querying relational DB for file_size: {e}")
+            pass
+        
+    # 2. Fetch chunk summaries
+    # Path: TextDocument <- DocumentChunk -> TextSummary
+    query_summaries = """
+    MATCH (doc:Node)-[e1:EDGE]-(chunk:Node)-[e2:EDGE]-(summary:Node)
+    WHERE doc.name = $doc_name
+      AND doc.type IN ['TextDocument', 'PdfDocument', 'AudioDocument', 'ImageDocument', 'UnstructuredDocument']
+      AND e1.relationship_name = 'is_part_of'
+      AND chunk.type = 'DocumentChunk'
+      AND e2.relationship_name = 'made_from'
+      AND summary.type = 'TextSummary'
+    RETURN summary.properties
+    """
+    
+    summaries_list = []
+    try:
+        results_summaries = await graph_engine.query(query_summaries, {"doc_name": doc_name})
+        print(f"DEBUG: Summary results: {results_summaries}")
+        if results_summaries:
+            for row in results_summaries:
+                if not row:
+                    continue
+                props_str = row[0]
+                
+                try:
+                    props = json.loads(props_str) if isinstance(props_str, str) else props_str
+                    if isinstance(props, dict):
+                        text = props.get("text")
+                        if text:
+                            summaries_list.append(text)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+    except Exception as e:
+        print(f"DEBUG: Error querying summaries: {e}")
+        pass
+        
+    return {
+        "filename": filename,
+        "file_size": file_size,
+        "created_at": created_at,
+        "updated_at": updated_at,
+        "summaries": summaries_list
+    }
 
