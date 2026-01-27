@@ -58,6 +58,7 @@ class RetrievalDataDTO(OutDTO):
     idKnowledge: str = Field(alias="idKnowledge")
     knowledgeType: str = Field(alias="knowledgeType")
     summary: Optional[str] = Field(default=None, alias="summary")
+    filename: Optional[str] = Field(default=None, alias="filename")
 
 
 class RetrievalResponseDTO(OutDTO):
@@ -254,7 +255,8 @@ def get_search_router() -> APIRouter:
                     {
                         "idKnowledge": r.id_knowledge, 
                         "knowledgeType": r.knowledge_type,
-                        "summary": r.summary
+                        "summary": r.summary,
+                        "filename": getattr(r, "filename", None),
                     }
                     for r in results
                 ]
