@@ -133,6 +133,34 @@ app = FastAPI(debug=app_environment != "prod", lifespan=lifespan)
 attach_stream_handler()
 
 
+@app.middleware("http")
+async def normalize_bribrain_content_type(request: Request, call_next):
+    """
+    Accept custom Cognee content type aliases by rewriting them to application/json.
+
+    Some clients send `application-bribrain/json` or `application/bribrain+json`;
+    Starlette does not treat these as JSON by default. We normalize them here so
+    downstream body parsing works the same as application/json.
+    """
+    raw_headers = list(request.scope.get("headers", []))
+    rewritten = False
+    new_headers = []
+    for key, value in raw_headers:
+        if key.lower() == b"content-type":
+            val_lower = value.decode("latin-1").lower()
+            if val_lower.startswith("application-bribrain/json") or val_lower.startswith(
+                "application/bribrain+json"
+            ):
+                value = b"application/json"
+                rewritten = True
+        new_headers.append((key, value))
+
+    if rewritten:
+        request.scope["headers"] = new_headers
+
+    return await call_next(request)
+
+
 # Read allowed origins from environment variable (comma-separated)
 CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS")
 if CORS_ALLOWED_ORIGINS:
