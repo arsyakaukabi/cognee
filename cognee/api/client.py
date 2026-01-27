@@ -41,6 +41,8 @@ from cognee.api.v1.users.routers import (
     get_visualize_router,
 )
 from cognee.api.v1.pipeline.routers import get_pipeline_router
+from cognee.api.v1.logs import get_logs_router
+from cognee.shared.log_stream import attach_stream_handler
 from cognee.modules.users.methods.get_authenticated_user import REQUIRE_AUTHENTICATION
 
 # Ensure application logging is configured for container stdout/stderr
@@ -128,6 +130,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(debug=app_environment != "prod", lifespan=lifespan)
+attach_stream_handler()
 
 
 # Read allowed origins from environment variable (comma-separated)
@@ -315,6 +318,8 @@ app.include_router(get_ontology_router(), prefix="/api/v1/ontologies", tags=["on
 app.include_router(get_settings_router(), prefix="/api/v1/settings", tags=["settings"])
 
 app.include_router(get_visualize_router(), prefix="/api/v1/visualize", tags=["visualize"])
+
+app.include_router(get_logs_router(), prefix="/api/v1/logs", tags=["logs"])
 
 app.include_router(get_delete_router(), prefix="/api/v1/delete", tags=["delete"])
 
