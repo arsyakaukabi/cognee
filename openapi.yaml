@@ -3500,12 +3500,6 @@ components:
           - type: string
           - type: 'null'
           title: Summary
-        filename:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Filename
-          description: Document filename with original extension
       type: object
       required:
       - idKnowledge

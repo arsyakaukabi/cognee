@@ -15,11 +15,10 @@ from cognee.modules.search.custom import search_knowledge_ids
 
 
 class RetrievalResult(BaseModel):
-    """Single retrieval result with document ID, knowledge type, optional summary, and filename."""
+    """Single retrieval result with document ID, knowledge type, and optional summary."""
     id_knowledge: str
     knowledge_type: str
     summary: Optional[str] = None
-    filename: Optional[str] = None
 
 
 def parse_document_name(doc_name: str) -> Tuple[str, str]:
@@ -319,36 +318,23 @@ async def retrieve(query: str, top_k: int = 10, search_type: str = "chunks") -> 
             else:
                 docs_needing_id_lookup.append(doc_name)
         
-        # Batch fetch doc_ids (for non-prefix docs) and original_extension (for ALL docs) from Data table
+        # Batch fetch doc_ids from Data table for non-prefix docs
         doc_id_map = {}  # doc_name -> doc_id
-        doc_ext_map = {}  # doc_name -> original_extension (for ALL docs)
-        
-        try:
-            from cognee.infrastructure.databases.relational import get_relational_engine
-            from cognee.modules.data.models import Data
-            from sqlalchemy import select
-            
-            db_engine = get_relational_engine()
-            async with db_engine.get_async_session() as session:
-                # Fetch for ALL doc_names to get extensions
-                stmt = select(
-                    Data.name, 
-                    Data.id, 
-                    Data.original_extension,
-                    Data.extension
-                ).where(Data.name.in_(doc_names))
-                result = await session.execute(stmt)
-                for row in result:
-                    doc_name_row = row[0]
-                    if doc_name_row and row[1]:
-                        doc_id_map[doc_name_row] = str(row[1])
-                    if doc_name_row:
-                        # Prefer original_extension, fallback to extension
-                        ext = row[2] or row[3]
-                        if ext:
-                            doc_ext_map[doc_name_row] = ext if ext.startswith('.') else f".{ext}"
-        except Exception:
-            pass
+        if docs_needing_id_lookup:
+            try:
+                from cognee.infrastructure.databases.relational import get_relational_engine
+                from cognee.modules.data.models import Data
+                from sqlalchemy import select
+                
+                db_engine = get_relational_engine()
+                async with db_engine.get_async_session() as session:
+                    stmt = select(Data.name, Data.id).where(Data.name.in_(docs_needing_id_lookup))
+                    result = await session.execute(stmt)
+                    for row in result:
+                        if row[0] and row[1]:
+                            doc_id_map[row[0]] = str(row[1])
+            except Exception:
+                pass
         
         # Parse all docs and identify which ones need summaries
         parsed_docs = {}  # doc_name -> (id, type)
@@ -376,21 +362,15 @@ async def retrieve(query: str, top_k: int = 10, search_type: str = "chunks") -> 
             graph_engine = await get_graph_engine()
             summaries = await _get_summaries_batch(graph_engine, docs_needing_summary)
         
-        # Build results with summaries and filename
+        # Build results with summaries
         results = []
         for doc_name in doc_names:
             id_knowledge, knowledge_type = parsed_docs[doc_name]
             summary = summaries.get(doc_name)  # None if not found or excluded
-            
-            # Build filename from doc_name + extension
-            ext = doc_ext_map.get(doc_name, "")
-            filename = f"{doc_name}{ext}" if ext else doc_name
-            
             results.append(RetrievalResult(
                 id_knowledge=id_knowledge,
                 knowledge_type=knowledge_type,
-                summary=summary,
-                filename=filename
+                summary=summary
             ))
         return results
     else:
