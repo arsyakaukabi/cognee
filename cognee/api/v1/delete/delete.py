@@ -92,6 +92,133 @@ async def delete(
     return await delete_single_document(data_id, dataset.id, mode)
 
 
+async def delete_batch(
+    data_ids: list[UUID],
+    dataset_id: UUID,
+    mode: str = "soft",
+    user: User = None,
+):
+    """Delete multiple data IDs from the specified dataset, aggregating vector deletes."""
+    if user is None:
+        user = await get_default_user()
+
+    dataset_list = await get_authorized_existing_datasets([dataset_id], "delete", user)
+    if not dataset_list:
+        raise DatasetNotFoundError(f"Dataset not found or access denied: {dataset_id}")
+    dataset = dataset_list[0]
+
+    await set_database_global_context_variables(dataset.id, dataset.owner_id)
+
+    # Validate all data_ids belong to the dataset
+    db_engine = get_relational_engine()
+    valid_ids: list[str] = []
+    async with db_engine.get_async_session() as session:
+        for data_id in data_ids:
+            data_point = (
+                await session.execute(select(Data).filter(Data.id == data_id))
+            ).scalar_one_or_none()
+            if data_point is None:
+                raise DocumentNotFoundError(f"Data not found with ID: {data_id}")
+
+            dataset_data_link = (
+                await session.execute(
+                    select(DatasetData).filter(
+                        DatasetData.data_id == data_id, DatasetData.dataset_id == dataset_id
+                    )
+                )
+            ).scalar_one_or_none()
+
+            if dataset_data_link is None:
+                raise DocumentNotFoundError(f"Data {data_id} not found in dataset {dataset_id}")
+
+            valid_ids.append(str(data_point.id))
+
+    # Perform deletions and aggregate vector node ids
+    all_deleted_node_ids: list[str] = []
+    graph_counts = []
+    for data_id in valid_ids:
+        deletion_result = await delete_document_subgraph(data_id, mode)
+        graph_counts.append(deletion_result["deleted_counts"])
+        all_deleted_node_ids.extend(deletion_result["deleted_node_ids"])
+
+    # Deduplicate node ids
+    all_deleted_node_ids = list(dict.fromkeys(all_deleted_node_ids))
+
+    # Vector deletion aggregated
+    vector_engine = get_vector_engine()
+    subclasses = get_all_subclasses(DataPoint)
+    vector_collections = []
+    for subclass in subclasses:
+        index_fields = subclass.model_fields["metadata"].default.get("index_fields", [])
+        for field_name in index_fields:
+            vector_collections.append(f"{subclass.__name__}_{field_name}")
+    if not vector_collections:
+        vector_collections = [
+            "DocumentChunk_text",
+            "EdgeType_relationship_name",
+            "EntityType_name",
+            "Entity_name",
+            "TextDocument_name",
+            "TextSummary_text",
+        ]
+    for collection in vector_collections:
+        if await vector_engine.has_collection(collection):
+            await vector_engine.delete_data_points(collection, all_deleted_node_ids)
+
+    # Relational deletions per document
+    db_engine = get_relational_engine()
+    async with db_engine.get_async_session() as session:
+        from sqlalchemy import update, or_
+        from datetime import datetime
+        from cognee.modules.data.models.graph_relationship_ledger import GraphRelationshipLedger
+
+        # Mark ledger
+        uuid_ids = [UUID(x.replace("-", "")) for x in all_deleted_node_ids if x]
+        if uuid_ids:
+            update_stmt = (
+                update(GraphRelationshipLedger)
+                .where(
+                    or_(
+                        GraphRelationshipLedger.source_node_id.in_(uuid_ids),
+                        GraphRelationshipLedger.destination_node_id.in_(uuid_ids),
+                    )
+                )
+                .values(deleted_at=datetime.now())
+            )
+            await session.execute(update_stmt)
+
+        for data_id in valid_ids:
+            data_point = (
+                await session.execute(select(Data).filter(Data.id == UUID(data_id)))
+            ).scalar_one_or_none()
+            if data_point is None:
+                continue
+
+            dataset_delete_stmt = sql_delete(DatasetData).where(
+                DatasetData.data_id == data_point.id, DatasetData.dataset_id == dataset.id
+            )
+            await session.execute(dataset_delete_stmt)
+
+            remaining_datasets = (
+                await session.execute(select(DatasetData).filter(DatasetData.data_id == data_point.id))
+            ).scalar_one_or_none()
+
+            if remaining_datasets is None:
+                data_delete_stmt = sql_delete(Data).where(Data.id == data_point.id)
+                await session.execute(data_delete_stmt)
+
+        await session.commit()
+
+    return {
+        "status": "success",
+        "message": "Documents deleted from graph, vector, and relational databases",
+        "data_ids": valid_ids,
+        "dataset": str(dataset_id),
+        "graph_deletions": graph_counts,
+        "deleted_node_ids": all_deleted_node_ids,
+    }
+
+
 async def delete_single_document(data_id: str, dataset_id: UUID = None, mode: str = "soft"):
     """Delete a single document by its content hash."""
 

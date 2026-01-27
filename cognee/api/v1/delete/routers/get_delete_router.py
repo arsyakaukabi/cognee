@@ -59,4 +59,37 @@ def get_delete_router() -> APIRouter:
             logger.error(f"Error during deletion by data_id: {str(error)}")
             return JSONResponse(status_code=409, content={"error": str(error)})
 
+    @router.post("/batch", response_model=None)
+    async def delete_batch(
+        data_ids: list[UUID],
+        dataset_id: UUID,
+        mode: str = "soft",
+        user: User = Depends(get_authenticated_user),
+    ):
+        """Delete multiple data IDs from the specified dataset."""
+        send_telemetry(
+            "Delete Batch API Endpoint Invoked",
+            user.id,
+            additional_properties={
+                "endpoint": "POST /v1/delete/batch",
+                "dataset_id": str(dataset_id),
+                "data_ids": [str(i) for i in data_ids],
+                "cognee_version": cognee_version,
+            },
+        )
+
+        from cognee.api.v1.delete import delete_batch as cognee_delete_batch
+
+        try:
+            result = await cognee_delete_batch(
+                data_ids=data_ids,
+                dataset_id=dataset_id,
+                mode=mode,
+                user=user,
+            )
+            return result
+        except Exception as error:
+            logger.error(f"Error during batch deletion: {str(error)}")
+            return JSONResponse(status_code=409, content={"error": str(error)})
+
     return router

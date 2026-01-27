@@ -1865,6 +1865,53 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/delete/batch:
+    post:
+      tags:
+      - delete
+      summary: Delete Batch
+      description: Delete multiple data IDs from a dataset in one request.
+      operationId: delete_batch_api_v1_delete_batch_post
+      security:
+      - OAuth2PasswordBearer: []
+      - APIKeyCookie: []
+      parameters:
+      - name: dataset_id
+        in: query
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Dataset Id
+      - name: mode
+        in: query
+        required: false
+        schema:
+          type: string
+          default: soft
+          title: Mode
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                type: string
+                format: uuid
+              title: Data Ids
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/update:
     patch:
       tags:
