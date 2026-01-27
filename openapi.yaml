@@ -2498,6 +2498,21 @@ paths:
       security:
       - OAuth2PasswordBearer: []
       - APIKeyCookie: []
+  /api/v1/logs/stream:
+    get:
+      tags:
+      - logs
+      summary: Stream Logs (SSE)
+      description: Stream backend logs in real-time via Server-Sent Events.
+      operationId: stream_logs_api_v1_logs_stream_get
+      responses:
+        '200':
+          description: Stream of log lines
+          content:
+            text/event-stream:
+              schema:
+                type: string
+      security: []
 components:
   schemas:
     Body_add_api_v1_add_post:
