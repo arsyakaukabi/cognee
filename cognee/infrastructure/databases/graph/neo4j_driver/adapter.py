@@ -908,7 +908,7 @@ class Neo4jAdapter(GraphDBInterface):
 
         return (nodes, edges)
 
-    async def get_graph_data(self):
+    async def get_graph_data(self, limit: int | None = None, order_by_newest: bool = False):
         """
         Retrieve comprehensive data about nodes and relationships within the graph.
 
@@ -923,7 +923,9 @@ class Neo4jAdapter(GraphDBInterface):
 
         try:
             # Retrieve nodes
-            query = "MATCH (n) RETURN ID(n) AS id, labels(n) AS labels, properties(n) AS properties"
+            order_clause = "ORDER BY n.created_at DESC" if order_by_newest else ""
+            limit_clause = f"LIMIT {limit}" if limit is not None else ""
+            query = f"MATCH (n) RETURN ID(n) AS id, labels(n) AS labels, properties(n) AS properties {order_clause} {limit_clause}"
             result = await self.query(query)
 
             nodes = []
@@ -936,11 +938,16 @@ class Neo4jAdapter(GraphDBInterface):
                 )
 
             # Retrieve edges
-            query = """
-            MATCH (n)-[r]->(m)
-            RETURN ID(n) AS source, ID(m) AS target, TYPE(r) AS type, properties(r) AS properties
-            """
-            result = await self.query(query)
+            node_ids = [record["properties"]["id"] for record in result]
+            if node_ids:
+                query = """
+                MATCH (n)-[r]->(m)
+                WHERE n.id IN $ids AND m.id IN $ids
+                RETURN ID(n) AS source, ID(m) AS target, TYPE(r) AS type, properties(r) AS properties
+                """
+                result = await self.query(query, {"ids": node_ids})
+            else:
+                result = []
 
             edges = []
             for record in result:
