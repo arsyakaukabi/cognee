@@ -2,11 +2,13 @@ import os
 import json
 import base64
 from pathlib import Path
-
-DEFAULT_LOGO_FILENAME = "bri_logo.png"
+from datetime import datetime, timezone
 
 from cognee.shared.logging_utils import get_logger
 from cognee.infrastructure.files.storage.LocalFileStorage import LocalFileStorage
+
+DEFAULT_LOGO_FILENAME = "bri_logo.png"
+DEFAULT_RECENT_SECONDS = 300  # 5 minutes
 
 logger = get_logger()
 
@@ -19,6 +21,7 @@ async def cognee_network_visualization(graph_data, destination_file_path: str = 
     G = networkx.DiGraph()
 
     nodes_list = []
+    # Per-type color map
     color_map = {
         "Entity": "#5C10F4",
         "EntityType": "#A550FF",
@@ -32,6 +35,57 @@ async def cognee_network_visualization(graph_data, destination_file_path: str = 
         "SchemaRelationship": "#323332",
         "default": "#D8D8D8",
     }
+    # Distinct colors for "recent" nodes (created within configurable window)
+    # Recent nodes use a red gradient (light → dark) to stand out clearly
+    recent_color_map = {
+        "Entity": "#FFC1C1",            # lightest red
+        "EntityType": "#FF9A9A",
+        "DocumentChunk": "#FF7474",
+        "TextSummary": "#FF8A8A",
+        "TableRow": "#FF5E5E",
+        "TableType": "#FF7D7D",
+        "ColumnValue": "#FF4A4A",
+        "SchemaTable": "#FF6666",
+        "DatabaseSchema": "#FF5050",
+        "SchemaRelationship": "#E63B3B", # darker red
+        "default": "#CC3030",            # deepest red fallback
+    }
+
+    recent_seconds = os.getenv("VISUALIZATION_RECENT_SECONDS")
+    if recent_seconds and recent_seconds.isdigit():
+        recent_seconds = int(recent_seconds)
+    else:
+        recent_seconds = DEFAULT_RECENT_SECONDS
+
+    def _parse_created_at(value):
+        """
+        Try to parse created_at field into a datetime with UTC timezone.
+        Supports:
+        - ISO strings
+        - epoch seconds
+        - epoch milliseconds
+        """
+        if value is None:
+            return None
+        try:
+            if isinstance(value, (int, float)):
+                # Heuristic: milliseconds if big
+                if value > 1e11:
+                    return datetime.fromtimestamp(value / 1000, tz=timezone.utc)
+                return datetime.fromtimestamp(value, tz=timezone.utc)
+            if isinstance(value, str):
+                try:
+                    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+                except ValueError:
+                    # Try integer string
+                    if value.isdigit():
+                        iv = int(value)
+                        if iv > 1e11:
+                            return datetime.fromtimestamp(iv / 1000, tz=timezone.utc)
+                        return datetime.fromtimestamp(iv, tz=timezone.utc)
+            return None
+        except Exception:
+            return None
 
     for node_id, node_info in nodes_data:
         node_info = node_info.copy()
@@ -39,15 +93,19 @@ async def cognee_network_visualization(graph_data, destination_file_path: str = 
         node_info["color"] = color_map.get(node_info.get("type", "default"), "#D3D3D3")
         node_info["name"] = node_info.get("name", str(node_id))
 
+        # Highlight very recent nodes (created within last 5 minutes)
+        created_dt = _parse_created_at(node_info.get("created_at"))
+        if created_dt:
+            age_seconds = (datetime.now(tz=timezone.utc) - created_dt).total_seconds()
+            if age_seconds <= recent_seconds:
+                node_info["color"] = recent_color_map.get(
+                    node_info.get("type", "default"), recent_color_map["default"]
+                )
+
         try:
             del node_info[
                 "updated_at"
             ]  #:TODO: We should decide what properties to show on the nodes and edges, we dont necessarily need all.
-        except KeyError:
-            pass
-
-        try:
-            del node_info["created_at"]
         except KeyError:
             pass
 
