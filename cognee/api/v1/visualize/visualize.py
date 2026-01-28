@@ -1,4 +1,5 @@
 import os
+import asyncio
 
 from cognee.modules.visualization.cognee_network_visualization import (
     cognee_network_visualization,
@@ -6,10 +7,6 @@ from cognee.modules.visualization.cognee_network_visualization import (
 from cognee.infrastructure.databases.graph import get_graph_engine
 from cognee.shared.logging_utils import get_logger, setup_logging, ERROR
 from pathlib import Path
-
-
-import asyncio
-
 
 logger = get_logger()
 
@@ -28,11 +25,9 @@ async def visualize_graph(
     graph_engine = await get_graph_engine()
     # Default limit from env if not explicitly set
     if node_limit is None:
-        env_limit = os.getenv("VISUALIZATION_NODE_LIMIT")
-        if env_limit and env_limit.isdigit():
-            node_limit = int(env_limit)
-        else:
-            node_limit = 200
+        env_node_limit = os.getenv("VISUALIZATION_NODE_LIMIT")
+        if env_node_limit and env_node_limit.isdigit():
+            node_limit = int(env_node_limit)
 
     graph_data = await graph_engine.get_graph_data(limit=node_limit, order_by_newest=order_by_newest)
 
