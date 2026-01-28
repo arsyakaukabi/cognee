@@ -1183,6 +1183,8 @@ class KuzuAdapter(GraphDBInterface):
 
     async def get_graph_data(
         self,
+        limit: int | None = None,
+        order_by_newest: bool = False,
     ) -> Tuple[List[Tuple[str, Dict[str, Any]]], List[Tuple[str, str, str, Dict[str, Any]]]]:
         """
         Get all nodes and edges in the graph.
@@ -1204,15 +1206,25 @@ class KuzuAdapter(GraphDBInterface):
         start_time = time.time()
 
         try:
+            # Limit nodes to keep visualization lightweight (e.g., 200 newest by created_at)
             nodes_query = """
             MATCH (n:Node)
-            RETURN n.id, {
+            WITH n
+            {order_clause}
+            {limit_clause}
+            RETURN n.id, {{
                 name: n.name,
                 type: n.type,
-                properties: n.properties
-            }
+                properties: n.properties,
+                created_at: n.created_at
+            }}
             """
-            nodes = await self.query(nodes_query)
+            order_clause = "ORDER BY n.created_at DESC" if order_by_newest else ""
+            limit_clause = "LIMIT $limit" if limit is not None else ""
+            nodes = await self.query(
+                nodes_query.format(order_clause=order_clause, limit_clause=limit_clause),
+                {"limit": limit} if limit is not None else {},
+            )
             formatted_nodes = []
             for n in nodes:
                 if n[0]:
@@ -1230,11 +1242,17 @@ class KuzuAdapter(GraphDBInterface):
                 logger.warning("No nodes found in the database")
                 return [], []
 
-            edges_query = """
-            MATCH (n:Node)-[r]->(m:Node)
-            RETURN n.id, m.id, r.relationship_name, r.properties
-            """
-            edges = await self.query(edges_query)
+            # Use only edges where both endpoints are in the limited node set
+            selected_ids = [nid for nid, _ in formatted_nodes]
+            if selected_ids:
+                edges_query = """
+                MATCH (a:Node)-[r]->(b:Node)
+                WHERE a.id IN $ids AND b.id IN $ids
+                RETURN a.id, b.id, r.relationship_name, r.properties
+                """
+                edges = await self.query(edges_query, {"ids": selected_ids})
+            else:
+                edges = []
             formatted_edges = []
             for e in edges:
                 if e and len(e) >= 3:

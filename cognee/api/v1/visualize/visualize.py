@@ -1,3 +1,5 @@
+import os
+
 from cognee.modules.visualization.cognee_network_visualization import (
     cognee_network_visualization,
 )
@@ -12,7 +14,11 @@ import asyncio
 logger = get_logger()
 
 
-async def visualize_graph(destination_file_path: str = None):
+async def visualize_graph(
+    destination_file_path: str = None,
+    node_limit: int | None = None,
+    order_by_newest: bool = True,
+):
     was_provided = destination_file_path is not None
     if not was_provided:
         repo_root = Path(__file__).resolve().parents[3]
@@ -20,7 +26,15 @@ async def visualize_graph(destination_file_path: str = None):
         destination_file_path = str(destination_dir / "graph_visualization.html")
 
     graph_engine = await get_graph_engine()
-    graph_data = await graph_engine.get_graph_data()
+    # Default limit from env if not explicitly set
+    if node_limit is None:
+        env_limit = os.getenv("VISUALIZATION_NODE_LIMIT")
+        if env_limit and env_limit.isdigit():
+            node_limit = int(env_limit)
+        else:
+            node_limit = 200
+
+    graph_data = await graph_engine.get_graph_data(limit=node_limit, order_by_newest=order_by_newest)
 
     graph = await cognee_network_visualization(graph_data, destination_file_path)
 

@@ -625,7 +625,9 @@ class NeptuneGraphDB(GraphDBInterface):
             logger.error(f"Failed to delete graph: {error_msg}")
             raise Exception(f"Failed to delete graph: {error_msg}") from e
 
-    async def get_graph_data(self) -> Tuple[List[Node], List[EdgeData]]:
+    async def get_graph_data(
+        self, limit: int | None = None, order_by_newest: bool = False
+    ) -> Tuple[List[Node], List[EdgeData]]:
         """
         Retrieve all nodes and edges within the graph.
 
@@ -635,23 +637,32 @@ class NeptuneGraphDB(GraphDBInterface):
         """
         try:
             # Query to get all nodes
+            order_clause = "ORDER BY n.created_at DESC" if order_by_newest else ""
+            limit_clause = f"LIMIT {limit}" if limit is not None else ""
+
             nodes_query = f"""
             MATCH (n:{self._GRAPH_NODE_LABEL})
+            {order_clause}
+            {limit_clause}
             RETURN id(n) AS node_id, properties(n) AS properties
             """
 
-            # Query to get all edges
-            edges_query = f"""
-            MATCH (source:{self._GRAPH_NODE_LABEL})-[r]->(target:{self._GRAPH_NODE_LABEL})
-            RETURN id(source) AS source_id, id(target) AS target_id, type(r) AS relationship_name, properties(r) AS properties
-            """
-
-            # Execute both queries
             nodes_result = await self.query(nodes_query)
-            edges_result = await self.query(edges_query)
 
             # Format nodes as (node_id, properties) tuples
             nodes = [(result["node_id"], result["properties"]) for result in nodes_result]
+
+            # Query to get all edges between the selected nodes
+            if nodes:
+                ids = [n[0] for n in nodes]
+                edges_query = f"""
+                MATCH (source:{self._GRAPH_NODE_LABEL})-[r]->(target:{self._GRAPH_NODE_LABEL})
+                WHERE id(source) IN $ids AND id(target) IN $ids
+                RETURN id(source) AS source_id, id(target) AS target_id, type(r) AS relationship_name, properties(r) AS properties
+                """
+                edges_result = await self.query(edges_query, {"ids": ids})
+            else:
+                edges_result = []
 
             # Format edges as (source_id, target_id, relationship_name, properties) tuples
             edges = [

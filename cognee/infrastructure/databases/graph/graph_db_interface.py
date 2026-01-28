@@ -300,9 +300,17 @@ class GraphDBInterface(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def get_graph_data(self) -> Tuple[List[Node], List[EdgeData]]:
+    async def get_graph_data(
+        self,
+        limit: int | None = None,
+        order_by_newest: bool = False,
+    ) -> Tuple[List[Node], List[EdgeData]]:
         """
-        Retrieve all nodes and edges within the graph.
+        Retrieve nodes and edges within the graph.
+
+        Args:
+            limit: Optional maximum number of nodes to return (edges will be limited to these nodes)
+            order_by_newest: If True, prefer newest nodes when applying limit (best-effort; depends on backend metadata)
         """
         raise NotImplementedError
 
