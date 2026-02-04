@@ -212,3 +212,4 @@ data/
 *.dump
 
 graph-migration/output
+.cursor/

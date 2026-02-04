@@ -25,6 +25,9 @@ from cognee.infrastructure.llm.tokenizer.Mistral import (
 from cognee.infrastructure.llm.tokenizer.TikToken import (
     TikTokenTokenizer,
 )
+from cognee.infrastructure.llm.tokenizer.ServerTokenize import (
+    ServerTokenizer,
+)
 from cognee.shared.rate_limiting import embedding_rate_limiter_context_manager
 from cognee.modules.observability.get_observe import get_observe
 from cognee.modules.observability.langfuse_utils import (
@@ -52,6 +55,22 @@ def _embedding_usage(token_count: Optional[int]) -> Optional[dict]:
         "completion_tokens": 0,
         "total_tokens": token_count,
     }
+
+
+def _fallback_tokenizer_custom(model: str, max_completion_tokens: int):
+    """HuggingFace tokenizer for model id, fallback to TikToken on failure."""
+    hf_model = model.replace("hosted_vllm/", "").replace("openai/", "")
+    try:
+        return HuggingFaceTokenizer(
+            model=hf_model,
+            max_completion_tokens=max_completion_tokens,
+        )
+    except Exception as e:
+        logger.warning(f"Could not get tokenizer from HuggingFace due to: {e}")
+        logger.info("Switching to TikToken default tokenizer.")
+        return TikTokenTokenizer(
+            model=None, max_completion_tokens=max_completion_tokens
+        )
 
 
 class LiteLLMEmbeddingEngine(EmbeddingEngine):
@@ -249,6 +268,13 @@ class LiteLLMEmbeddingEngine(EmbeddingEngine):
             The tokenizer instance compatible with the model.
         """
         logger.debug(f"Loading tokenizer for model {self.model}...")
+        # Optional: force server's /tokenize via env (e.g. vLLM)
+        if os.getenv("EMBEDDING_USE_SERVER_TOKENIZER", "").lower() in ("true", "1", "yes") and self.endpoint:
+            base = self.endpoint.rstrip("/").replace("/v1", "")
+            tokenize_url = f"{base}/tokenize"
+            logger.info(f"Using server tokenizer: {tokenize_url}")
+            return ServerTokenizer(tokenize_url=tokenize_url)
+
         # If model also contains provider information, extract only model information
         model = self.model.split("/")[-1]
 
@@ -257,30 +283,31 @@ class LiteLLMEmbeddingEngine(EmbeddingEngine):
                 model=model, max_completion_tokens=self.max_completion_tokens
             )
         elif "gemini" in self.provider.lower():
-            # Since Gemini tokenization needs to send an API request to get the token count we will use TikToken to
-            # count tokens as we calculate tokens word by word
             tokenizer = TikTokenTokenizer(
                 model=None, max_completion_tokens=self.max_completion_tokens
             )
-            # Note: Gemini Tokenizer expects an LLM model as input and not the embedding model
-            # tokenizer = GeminiTokenizer(
-            #     llm_model=llm_model, max_completion_tokens=self.max_completion_tokens
-            # )
         elif "mistral" in self.provider.lower():
             tokenizer = MistralTokenizer(
                 model=model, max_completion_tokens=self.max_completion_tokens
             )
         else:
-            try:
-                tokenizer = HuggingFaceTokenizer(
-                    model=self.model.replace("hosted_vllm/", ""),
-                    max_completion_tokens=self.max_completion_tokens,
-                )
-            except Exception as e:
-                logger.warning(f"Could not get tokenizer from HuggingFace due to: {e}")
-                logger.info("Switching to TikToken default tokenizer.")
-                tokenizer = TikTokenTokenizer(
-                    model=None, max_completion_tokens=self.max_completion_tokens
+            # Custom / vLLM: prefer server /tokenize if endpoint is set, else HuggingFace → TikToken
+            if self.endpoint:
+                base = self.endpoint.rstrip("/").replace("/v1", "")
+                tokenize_url = f"{base}/tokenize"
+                try:
+                    server_tok = ServerTokenizer(tokenize_url=tokenize_url)
+                    server_tok.count_tokens("")  # probe: server must respond
+                    tokenizer = server_tok
+                    logger.info(f"Using server tokenizer: {tokenize_url}")
+                except Exception as e:
+                    logger.warning(f"Server tokenizer unavailable ({e}), falling back to HuggingFace/TikToken.")
+                    tokenizer = _fallback_tokenizer_custom(
+                        self.model, self.max_completion_tokens
+                    )
+            else:
+                tokenizer = _fallback_tokenizer_custom(
+                    self.model, self.max_completion_tokens
                 )
 
         logger.debug(f"Tokenizer loaded for model: {self.model}")

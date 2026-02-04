@@ -1,0 +1,104 @@
+---
+name: efficiency-and-deliberate-implementation
+description: Enforces efficient code and deliberate thinking before implementation. Avoid duplicated logic, redundant loops, and repeated initialization. Ensure the design is correct before writing code.
+alwaysApply: true
+---
+
+# Rule: Efficiency & Deliberate Implementation
+
+## Purpose
+
+This rule ensures that every piece of code is:
+- Efficient in both performance and structure
+- Thought through before implementation
+- Designed correctly to avoid large refactors later
+
+This rule MUST be applied at all times when writing or modifying code.
+
+---
+
+## Core Principles
+
+Always hold these two principles while coding:
+
+1. Code efficiency
+2. Thinking before implementation
+
+---
+
+## 1. Code Efficiency
+
+### Mandatory Rules
+
+- Do NOT duplicate core logic  
+  Extract shared logic into reusable functions, helpers, or modules.  
+  Maintain a single source of truth.
+
+- Avoid redundant loops  
+  If one pass is sufficient, do not use multiple passes.  
+  Combine related operations and choose appropriate data structures.
+
+- Avoid repeated initialization inside loops  
+  Do not repeatedly create objects, connections, regex patterns, or configurations inside loops.  
+  Initialize once and reuse.
+
+---
+
+### Examples (Inline Reference)
+
+JavaScript example:
+
+BAD: Two loops, duplicated traversal  
+const names = items.map(i => i.name);  
+const ids = items.map(i => i.id);
+
+GOOD: Single pass  
+Use one reduce pass to collect both names and ids.
+
+Python example:
+
+BAD: Regex created on every iteration  
+for line in lines:  
+  if re.match("\\d+", line):  
+    pass
+
+GOOD: Compile once and reuse  
+num_pattern = re.compile("\\d+")  
+for line in lines:  
+  if num_pattern.match(line):  
+    pass
+
+---
+
+## 2. Think Before Implementing
+
+### Pre-Implementation Checklist
+
+Before writing any code, pause briefly and answer:
+
+- What are the exact inputs and outputs?
+- What edge cases may occur?
+- What dependencies are involved (database, API, state, cache)?
+- Is this the simplest solution that satisfies the requirement?
+- Does the codebase already have a pattern or utility that can be reused?
+
+Only after these questions are answered should implementation begin.
+
+---
+
+## Implementation Rules
+
+- Do not write code without a clear solution in mind
+- Do not trade code quality for short-term speed
+- Aim for code that is correct, clear, efficient, and easy to maintain
+
+---
+
+## Expected Outcome
+
+When this rule is applied consistently:
+
+- Code remains readable and maintainable
+- Performance is efficient without premature optimization
+- Large refactors are minimized
+- Overall code quality scales with system growth

@@ -1072,6 +1072,7 @@ groq = [
     { name = "groq" },
 ]
 huggingface = [
+    { name = "safetensors" },
     { name = "transformers" },
 ]
 langchain = [
@@ -1098,6 +1099,7 @@ notebook = [
     { name = "notebook" },
 ]
 ollama = [
+    { name = "safetensors" },
     { name = "transformers" },
 ]
 postgres = [
@@ -1222,6 +1224,8 @@ requires-dist = [
     { name = "redis", marker = "extra == 'redis'", specifier = ">=5.0.3,<6.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9.2,<=0.13.1" },
     { name = "s3fs", extras = ["boto3"], marker = "extra == 'aws'", specifier = "==2025.3.2" },
+    { name = "safetensors", marker = "extra == 'huggingface'", specifier = ">=0.4.3" },
+    { name = "safetensors", marker = "extra == 'ollama'", specifier = ">=0.4.3" },
     { name = "scikit-learn", marker = "extra == 'evals'", specifier = ">=1.6.1,<2" },
     { name = "sentry-sdk", extras = ["fastapi"], marker = "extra == 'monitoring'", specifier = ">=2.9.0,<3" },
     { name = "sqlalchemy", specifier = ">=2.0.39,<3.0.0" },

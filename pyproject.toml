@@ -103,8 +103,8 @@ langchain = [
     "langchain_text_splitters>=0.3.2,<1.0.0",
 ]
 llama-index = ["llama-index-core>=0.12.11,<0.13"]
-huggingface = ["transformers>=4.46.3,<5"]
-ollama = ["transformers>=4.46.3,<5"]
+huggingface = ["transformers>=4.46.3,<5", "safetensors>=0.4.3"]
+ollama = ["transformers>=4.46.3,<5", "safetensors>=0.4.3"]
 mistral = ["mistral-common>=1.5.2,<2"]
 anthropic = ["anthropic>=0.27"]
 deepeval = ["deepeval>=3.0.1,<4"]
