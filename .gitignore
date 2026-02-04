@@ -212,4 +212,7 @@ data/
 *.dump
 
 graph-migration/output
-.cursor/
+
+# allow only these two files under cognee/testing
+!cognee/testing/run_eval_v2_compat.py
+!cognee/testing/data_test_new (1).csv
