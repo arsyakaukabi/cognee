@@ -58,7 +58,7 @@ def _embedding_usage(token_count: Optional[int]) -> Optional[dict]:
 
 
 def _fallback_tokenizer_custom(model: str, max_completion_tokens: int):
-    """HuggingFace tokenizer for model id, fallback to TikToken on failure."""
+    """HuggingFace tokenizer for model id. For custom models we avoid falling back to TikToken."""
     hf_model = model.replace("hosted_vllm/", "").replace("openai/", "")
     try:
         return HuggingFaceTokenizer(
@@ -66,11 +66,9 @@ def _fallback_tokenizer_custom(model: str, max_completion_tokens: int):
             max_completion_tokens=max_completion_tokens,
         )
     except Exception as e:
-        logger.warning(f"Could not get tokenizer from HuggingFace due to: {e}")
-        logger.info("Switching to TikToken default tokenizer.")
-        return TikTokenTokenizer(
-            model=None, max_completion_tokens=max_completion_tokens
-        )
+        # If HuggingFace tokenizer is unavailable, disable token counting for this engine
+        logger.warning(f"Could not get tokenizer from HuggingFace due to: {e}. Token counting will be disabled.")
+        return None
 
 
 class LiteLLMEmbeddingEngine(EmbeddingEngine):
@@ -152,17 +150,17 @@ class LiteLLMEmbeddingEngine(EmbeddingEngine):
             if self.mock:
                 response = {"data": [{"embedding": [0.0] * self.dimensions} for _ in text]}
                 embeddings = [data["embedding"] for data in response["data"]]
-                token_count = _count_tokens_safe(self.tokenizer, text)
                 update_langfuse_observation(
                     input={"items": len(text)},
                     model=self.model,
-                    usage=_embedding_usage(token_count),
+                    # In mock mode we skip token counting entirely
+                    usage=_embedding_usage(None),
                     metadata={
                         "dimensions": self.dimensions,
                         "embedding_model": self.model,
                         "provider": self.provider,
                         "mock": True,
-                        "token_count_source": "tokenizer" if token_count is not None else "none",
+                        "token_count_source": "none",
                     },
                 )
                 return embeddings
@@ -177,19 +175,17 @@ class LiteLLMEmbeddingEngine(EmbeddingEngine):
                     )
                 embeddings = [data["embedding"] for data in response.data]
                 usage = extract_usage_from_response(response)
-                token_count = _count_tokens_safe(self.tokenizer, text) if usage is None else None
                 update_langfuse_observation(
                     input={"items": len(text)},
                     model=self.model,
-                    usage=usage or _embedding_usage(token_count),
+                    # Prefer usage from provider response; we no longer call any local/server tokenizer here
+                    usage=usage,
                     metadata={
                         "dimensions": self.dimensions,
                         "embedding_model": self.model,
                         "provider": self.provider,
                         "mock": False,
-                        "token_count_source": "response"
-                        if usage is not None
-                        else ("tokenizer" if token_count is not None else "none"),
+                        "token_count_source": "response" if usage is not None else "none",
                     },
                 )
                 return embeddings

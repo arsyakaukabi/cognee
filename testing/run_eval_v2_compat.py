@@ -626,7 +626,7 @@ def main() -> None:
     # Default values match what the user might be used to
     parser.add_argument(
         "--input",
-        default="testing/data_test_new_800.csv",
+        default="testing/data_test_new (1).csv",
         help="Input CSV file path",
     )
     parser.add_argument("--output", default="eval_output.csv", help="Output CSV file path")
@@ -642,7 +642,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--api-url",
-        default="http://localhost:8000/api/v1/search/retrieval",
+        default="http://localhost:8100/api/v1/search/retrieval",
         help="Retrieval API endpoint",
     )
     parser.add_argument(
