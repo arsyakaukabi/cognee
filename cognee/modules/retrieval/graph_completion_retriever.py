@@ -80,7 +80,7 @@ class GraphCompletionRetriever(BaseGraphRetriever):
         return await resolve_edges_to_text(retrieved_edges)
 
     @trace_perf("GraphCompletionRetriever.get_triplets", "retrieval")
-    async def get_triplets(self, query: str) -> List[Edge]:
+    async def get_triplets(self, query: str, node_name: Optional[List[str]] = None) -> List[Edge]:
         """
         Retrieves relevant graph triplets based on a query string.
         
@@ -112,7 +112,7 @@ class GraphCompletionRetriever(BaseGraphRetriever):
                 top_k=self.top_k,
                 collections=vector_index_collections or None,
                 node_type=self.node_type,
-                node_name=self.node_name,
+                node_name=node_name if node_name else self.node_name,
                 wide_search_top_k=self.wide_search_top_k,
                 triplet_distance_penalty=self.triplet_distance_penalty,
             )
@@ -120,7 +120,7 @@ class GraphCompletionRetriever(BaseGraphRetriever):
         return found_triplets
 
     @trace_perf("GraphCompletionRetriever.get_context", "retrieval")
-    async def get_context(self, query: str) -> List[Edge]:
+    async def get_context(self, query: str, node_name: Optional[List[str]] = None) -> List[Edge]:
         """
         Retrieves and resolves graph triplets into context based on a query.
 
@@ -142,7 +142,7 @@ class GraphCompletionRetriever(BaseGraphRetriever):
             logger.warning("Search attempt on an empty knowledge graph")
             return []
 
-        triplets = await self.get_triplets(query)
+        triplets = await self.get_triplets(query, node_name=node_name)
 
         if len(triplets) == 0:
             logger.warning("Empty context was provided to the completion")

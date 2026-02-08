@@ -51,6 +51,11 @@ class RetrievalPayloadDTO(InDTO):
         default="chunks",
         description="Search type: 'chunks', 'graph_completion', or 'graph_completion_custom'"
     )
+    dataset_ids: Optional[list[UUID]] = Field(default=None, description="List of dataset UUIDs to filter by")
+    node_name: Optional[list[str]] = Field(
+        default=None,
+        description="Filter results to specific NodeSet names (same semantics as /api/v1/search node_name).",
+    )
 
 
 class RetrievalDataDTO(OutDTO):
@@ -236,6 +241,7 @@ def get_search_router() -> APIRouter:
                 "search_type": payload.search_type,
                 "query": payload.query[:100],
                 "top_k": payload.top_k,
+                "node_name": payload.node_name,
                 "cognee_version": cognee_version,
                 "correlation_id": cid,
             },
@@ -248,7 +254,11 @@ def get_search_router() -> APIRouter:
                 results = await retrieve(
                     query=payload.query,
                     top_k=payload.top_k,
-                    search_type=payload.search_type
+                    search_type=payload.search_type,
+                    dataset_ids=[str(ds_id) for ds_id in payload.dataset_ids]
+                    if payload.dataset_ids
+                    else None,
+                    node_name=payload.node_name,
                 )
                 
                 data = [

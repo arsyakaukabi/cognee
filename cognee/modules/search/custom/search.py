@@ -24,7 +24,8 @@ async def search_knowledge_ids(
     question: str,
     method: str = "graph",  # "graph" or "chunks"
     target_n: int = 10,
-    initial_top_k: int = 50
+    initial_top_k: int = 50,
+    node_name: List[str] = None
 ) -> List[str]:
     """
     Search and return top N knowledge IDs (TextDocument.name).
@@ -44,11 +45,12 @@ async def search_knowledge_ids(
     
     # Execute search
     if method == "graph":
-        logger.info(f"🔍 Searching using GRAPH_COMPLETION...")
+        logger.info("🔍 Searching using GRAPH_COMPLETION...")
         async with TraceSpan("search.execute_graph_completion_search", "search"):
             search_results = await search_executor.execute_graph_completion_search(
                 question, 
-                top_k=initial_top_k
+                top_k=initial_top_k,
+                node_name=node_name
             )
         
         # Map triplets to knowledge IDs with early stopping
@@ -63,7 +65,7 @@ async def search_knowledge_ids(
         expand_enabled = os.getenv("CUSTOM_SEARCH_EXPANSION_ENABLED", "true").lower() == "true"
         if expand_enabled and len(set(knowledge_ids)) < target_n:
             logger.info(f"   Initial search: {len(set(knowledge_ids))} unique IDs (target: {target_n})")
-            logger.info(f"   Expanding search...")
+            logger.info("   Expanding search...")
             async with TraceSpan("search.expand_to_n_unique", "search"):
                 knowledge_ids = await expand_to_n_unique_knowledge_ids(
                     search_results=search_results,
@@ -73,7 +75,8 @@ async def search_knowledge_ids(
                     search_executor=search_executor,
                     query=question,
                     initial_top_k=initial_top_k,
-                    max_top_k=200
+                    max_top_k=200,
+                    node_name=node_name,
                 )
         else:
             # Take only first target_n unique IDs
@@ -88,10 +91,11 @@ async def search_knowledge_ids(
             knowledge_ids = unique_ids
             
     elif method == "chunks":
-        logger.info(f"🔍 Searching using CHUNKS...")
+        logger.info("🔍 Searching using CHUNKS...")
         search_results = await search_executor.execute_chunk_search(
             question,
-            top_k=initial_top_k
+            top_k=initial_top_k,
+            node_name=node_name
         )
         
         # Map chunks to knowledge IDs with early stopping
@@ -105,7 +109,7 @@ async def search_knowledge_ids(
         expand_enabled = os.getenv("CUSTOM_SEARCH_EXPANSION_ENABLED", "true").lower() == "true"
         if expand_enabled and len(set(knowledge_ids)) < target_n:
             logger.info(f"   Initial search: {len(set(knowledge_ids))} unique IDs (target: {target_n})")
-            logger.info(f"   Expanding search...")
+            logger.info("   Expanding search...")
             knowledge_ids = await expand_to_n_unique_knowledge_ids(
                 search_results=search_results,
                 method="chunks",
@@ -114,7 +118,8 @@ async def search_knowledge_ids(
                 search_executor=search_executor,
                 query=question,
                 initial_top_k=initial_top_k,
-                max_top_k=200
+                max_top_k=200,
+                node_name=node_name,
             )
         else:
             # Take only first target_n unique IDs

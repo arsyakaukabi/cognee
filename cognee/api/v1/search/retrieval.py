@@ -169,7 +169,9 @@ async def _get_summaries_batch(graph_engine, doc_names: List[str]) -> Dict[str, 
     return summaries
 
 
-async def retrieve_chunks(query: str, top_k: int = 10) -> List[RetrievalResult]:
+async def retrieve_chunks(
+    query: str, top_k: int = 10, node_name: Optional[List[str]] = None
+) -> List[RetrievalResult]:
     """
     Retrieve documents using CHUNKS search type.
     
@@ -181,7 +183,8 @@ async def retrieve_chunks(query: str, top_k: int = 10) -> List[RetrievalResult]:
     chunks = await cognee.search(
         query_type=SearchType.CHUNKS,
         query_text=query,
-        top_k=top_k * 3  # Get more chunks to find unique documents
+        top_k=top_k * 3,  # Get more chunks to find unique documents
+        node_name=node_name,
     )
     
     if not chunks:
@@ -234,7 +237,9 @@ async def retrieve_chunks(query: str, top_k: int = 10) -> List[RetrievalResult]:
     return results
 
 
-async def retrieve_graph_completion(query: str, top_k: int = 10) -> List[RetrievalResult]:
+async def retrieve_graph_completion(
+    query: str, top_k: int = 10, node_name: Optional[List[str]] = None
+) -> List[RetrievalResult]:
     """
     Retrieve documents using GRAPH_COMPLETION (triplets) search type.
     
@@ -244,7 +249,7 @@ async def retrieve_graph_completion(query: str, top_k: int = 10) -> List[Retriev
     retriever = GraphCompletionRetriever(top_k=top_k * 3)
     
     # Get triplets from graph completion retriever
-    triplets = await retriever.get_context(query)
+    triplets = await retriever.get_context(query, node_name=node_name)
     
     if not triplets:
         return []
@@ -288,7 +293,13 @@ async def retrieve_graph_completion(query: str, top_k: int = 10) -> List[Retriev
     return results
 
 
-async def retrieve(query: str, top_k: int = 10, search_type: str = "chunks") -> List[RetrievalResult]:
+async def retrieve(
+    query: str,
+    top_k: int = 10,
+    search_type: str = "chunks",
+    dataset_ids: List[str] = None,
+    node_name: Optional[List[str]] = None,
+) -> List[RetrievalResult]:
     """
     Main retrieval function.
     
@@ -301,10 +312,12 @@ async def retrieve(query: str, top_k: int = 10, search_type: str = "chunks") -> 
         List of RetrievalResult with id_knowledge, knowledge_type, and summary (for graph_completion_custom)
     """
     if search_type.lower() == "graph_completion":
-        return await retrieve_graph_completion(query, top_k)
+        return await retrieve_graph_completion(query, top_k, node_name=node_name)
     elif search_type.lower() == "graph_completion_custom":
         # Get document names from custom search
-        doc_names = await search_knowledge_ids(query, method="graph", target_n=top_k)
+        doc_names = await search_knowledge_ids(
+            query, method="graph", target_n=top_k, node_name=node_name
+        )
         
         if not doc_names:
             return []
@@ -394,7 +407,7 @@ async def retrieve(query: str, top_k: int = 10, search_type: str = "chunks") -> 
             ))
         return results
     else:
-        return await retrieve_chunks(query, top_k)
+        return await retrieve_chunks(query, top_k, node_name=node_name)
 
 
 async def get_document_details(doc_name: str) -> Dict[str, Union[str, List[str], int, None]]:
@@ -496,4 +509,3 @@ async def get_document_details(doc_name: str) -> Dict[str, Union[str, List[str],
         "updated_at": updated_at,
         "summaries": summaries_list
     }
-

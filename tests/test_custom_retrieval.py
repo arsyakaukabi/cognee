@@ -1,16 +1,17 @@
 
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
+
 from cognee.api.v1.search.retrieval import retrieve
-from cognee.modules.search.custom import search_knowledge_ids
 
 @pytest.mark.asyncio
 async def test_search_knowledge_ids_integration():
     """Test integration of search_knowledge_ids into retrieval endpoint"""
     
     # Mock the search_knowledge_ids function
-    with patch("cognee.modules.search.custom.search_knowledge_ids", new_callable=AsyncMock) as mock_search:
-        mock_search.return_value = ["produk__id1", "wi__id2"]
+    with patch("cognee.api.v1.search.retrieval.search_knowledge_ids", new_callable=AsyncMock) as mock_search:
+        mock_search.return_value = ["produk_id1", "wi_id2"]
         
         # Test retrieve with custom type
         results = await retrieve(
@@ -20,7 +21,9 @@ async def test_search_knowledge_ids_integration():
         )
         
         # Verify search was called correctly
-        mock_search.assert_called_once_with("test query", method="graph", target_n=5)
+        mock_search.assert_called_once_with(
+            "test query", method="graph", target_n=5, node_name=None
+        )
         
         # Verify results parsing
         assert len(results) == 2
@@ -45,13 +48,13 @@ async def test_search_router_payload():
 @pytest.mark.asyncio
 async def test_retrieve_with_summary():
     """Test that retrieval includes summary field"""
-    with patch("cognee.modules.search.custom.search_knowledge_ids", new_callable=AsyncMock) as mock_search:
+    with patch("cognee.api.v1.search.retrieval.search_knowledge_ids", new_callable=AsyncMock) as mock_search:
         # Mock batch summary retrieval
         with patch("cognee.api.v1.search.retrieval._get_summaries_batch", new_callable=AsyncMock) as mock_summary:
             with patch("cognee.api.v1.search.retrieval.get_graph_engine", new_callable=AsyncMock):
                 
-                mock_search.return_value = ["produk__id1"]
-                mock_summary.return_value = {"produk__id1": "This is a test summary"}
+                mock_search.return_value = ["eng_01"]
+                mock_summary.return_value = {"eng_01": "This is a test summary"}
                 
                 results = await retrieve(
                     query="test query", 
@@ -60,6 +63,42 @@ async def test_retrieve_with_summary():
                 )
                 
                 assert len(results) == 1
-                assert results[0].id_knowledge == "id1"
-                assert results[0].knowledge_type == "produk"
+                assert results[0].knowledge_type == "others"
                 assert results[0].summary == "This is a test summary"
+                assert results[0].filename.startswith("eng_01")
+
+
+@pytest.mark.asyncio
+async def test_custom_retrieval_passes_node_name_filter():
+    """node_name should be passed through to custom search (NodeSet filtering)."""
+    with patch("cognee.api.v1.search.retrieval.search_knowledge_ids", new_callable=AsyncMock) as mock_search:
+        mock_search.return_value = []
+
+        await retrieve(
+            query="test query",
+            top_k=5,
+            search_type="graph_completion_custom",
+            node_name=["eng", "finance"],
+        )
+
+        mock_search.assert_called_once_with(
+            "test query", method="graph", target_n=5, node_name=["eng", "finance"]
+        )
+
+
+@pytest.mark.asyncio
+async def test_custom_retrieval_dataset_ids_do_not_override_nodeset_filter():
+    """dataset_ids should not be repurposed as node_name for graph_completion_custom."""
+    with patch("cognee.api.v1.search.retrieval.search_knowledge_ids", new_callable=AsyncMock) as mock_search:
+        mock_search.return_value = []
+
+        await retrieve(
+            query="test query",
+            top_k=5,
+            search_type="graph_completion_custom",
+            dataset_ids=["ds1", "ds2"],
+        )
+
+        mock_search.assert_called_once_with(
+            "test query", method="graph", target_n=5, node_name=None
+        )

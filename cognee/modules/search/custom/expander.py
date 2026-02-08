@@ -2,7 +2,7 @@
 Expand search results until we have exactly N unique knowledge IDs.
 """
 
-from typing import List, Literal, Any, TYPE_CHECKING
+from typing import List, Literal, Any, TYPE_CHECKING, Optional
 from cognee.infrastructure.databases.graph.graph_db_interface import GraphDBInterface
 from cognee.modules.graph.cognee_graph.CogneeGraphElements import Edge
 from cognee.shared.logging_utils import get_logger
@@ -21,7 +21,8 @@ async def expand_graph_completion_to_n_ids(
     search_executor: "SearchExecutor",
     query: str,
     initial_top_k: int = 10,
-    max_top_k: int = 200
+    max_top_k: int = 200,
+    node_name: Optional[List[str]] = None,
 ) -> List[str]:
     """
     Expand Graph Completion results until we have exactly N unique knowledge IDs.
@@ -73,16 +74,21 @@ async def expand_graph_completion_to_n_ids(
                    f"current_unique_ids={len(unique_ids)}, target={target_n}")
         
         # Fetch more triplets with increased top_k
-        new_triplets = await search_executor.execute_graph_completion_search(query, top_k=current_top_k)
+        if node_name is not None:
+            new_triplets = await search_executor.execute_graph_completion_search(
+                query, top_k=current_top_k, node_name=node_name
+            )
+        else:
+            new_triplets = await search_executor.execute_graph_completion_search(
+                query, top_k=current_top_k
+            )
         
         if not new_triplets:
             logger.warning(f"No more triplets found at top_k={current_top_k}, stopping expansion")
             break
         
         # Map new triplets to knowledge IDs
-        # Note: We can't use simple target_n here because we need to count *new* unique IDs against the *total* target
-        # But we can optimize by only mapping until we potentially fill the gap
-        remaining_needed = target_n - len(unique_ids)
+        # Note: target_n is None because we must measure newly found IDs against total unique count.
         new_knowledge_ids = await map_triplet_results_to_knowledge_ids(new_triplets, graph_engine, target_n=None)
         
         # Count new unique IDs before adding
@@ -123,7 +129,8 @@ async def expand_chunk_search_to_n_ids(
     search_executor: "SearchExecutor",
     query: str,
     initial_top_k: int = 10,
-    max_top_k: int = 200
+    max_top_k: int = 200,
+    node_name: Optional[List[str]] = None,
 ) -> List[str]:
     """
     Expand Chunk search results until we have exactly N unique knowledge IDs.
@@ -175,14 +182,20 @@ async def expand_chunk_search_to_n_ids(
                    f"current_unique_ids={len(unique_ids)}, target={target_n}")
         
         # Fetch more chunks with increased top_k
-        new_chunk_results = await search_executor.execute_chunk_search(query, top_k=current_top_k)
+        if node_name is not None:
+            new_chunk_results = await search_executor.execute_chunk_search(
+                query, top_k=current_top_k, node_name=node_name
+            )
+        else:
+            new_chunk_results = await search_executor.execute_chunk_search(
+                query, top_k=current_top_k
+            )
         
         if not new_chunk_results:
             logger.warning(f"No more chunks found at top_k={current_top_k}, stopping expansion")
             break
         
         # Map new chunks to knowledge IDs
-        remaining_needed = target_n - len(unique_ids)
         new_knowledge_ids = await map_chunk_results_to_knowledge_ids(new_chunk_results, graph_engine, target_n=None)
         
         # Count new unique IDs before adding
@@ -224,7 +237,8 @@ async def expand_to_n_unique_knowledge_ids(
     search_executor: "SearchExecutor",
     query: str,
     initial_top_k: int = 10,
-    max_top_k: int = 200
+    max_top_k: int = 200,
+    node_name: Optional[List[str]] = None,
 ) -> List[str]:
     """
     Expand search results until we have exactly N unique knowledge IDs.
@@ -244,11 +258,25 @@ async def expand_to_n_unique_knowledge_ids(
     """
     if method == "graph":
         return await expand_graph_completion_to_n_ids(
-            search_results, target_n, graph_engine, search_executor, query, initial_top_k, max_top_k
+            search_results,
+            target_n,
+            graph_engine,
+            search_executor,
+            query,
+            initial_top_k,
+            max_top_k,
+            node_name=node_name,
         )
     elif method == "chunks":
         return await expand_chunk_search_to_n_ids(
-            search_results, target_n, graph_engine, search_executor, query, initial_top_k, max_top_k
+            search_results,
+            target_n,
+            graph_engine,
+            search_executor,
+            query,
+            initial_top_k,
+            max_top_k,
+            node_name=node_name,
         )
     else:
         raise ValueError(f"Unknown method: {method}")
